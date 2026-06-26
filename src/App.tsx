@@ -1,7 +1,8 @@
 // src/App.tsx
 // Notes Demo 页面级状态与编排。
 //
-// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 4-10 章）：
+// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 4-10 章
+//          + 2026-06-26 save-tag-folder-ux 第 4-9 章）：
 //   - 页面顶层固定二态：`identity === null` 时只渲染 `LockScreen`；
 //     `identity !== null` 时才渲染 notes 工作区。
 //   - 不在初始化时自动恢复 identity；刷新页面回到 LockScreen 是预期行为，不是缺陷。
@@ -10,6 +11,10 @@
 //   - 选中 / 右键菜单 / 拖拽 / 解密缓存等真值仍然集中在 App 这一层。
 //   - 解密失败：note 仍保留；metadata 锁死；删除仍然允许。
 //   - 右键菜单 / 拖拽状态集中在这里管理；sidebar 只负责"显示 + 触发"。
+//   - 保存链路：**原地 patch**——不重选 note、不重置 draft、不重新解密。
+//   - 命名交互：新建文件夹 / 重命名文件夹 / 重命名 note 全部走 `NameInputDialog`；
+//     新建时若重名走自动补编号；重命名时若重名直接阻断。
+//   - pending note 的 dirty 判定：markdown 基线 = 空字符串（尚未持久化）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -29,6 +34,7 @@ import {
   deleteFolder,
   deleteNote,
   deleteOwnerSpace,
+  findAvailableName,
   getFolder,
   getNote,
   isFolderEmpty,
@@ -48,6 +54,11 @@ import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type 
 import { NoteEditor } from "./components/NoteEditor";
 import { NoteInspector } from "./components/NoteInspector";
 import { LockScreen } from "./components/LockScreen";
+import { NameInputDialog } from "./components/NameInputDialog";
+
+/** 新建 note / folder 的默认基名（自动补编号时按 "基名 N" 递增）。 */
+const DEFAULT_NOTE_BASE_NAME = "新 note";
+const DEFAULT_FOLDER_BASE_NAME = "新文件夹";
 
 const DEFAULT_TARGET_ORIGIN = "https://keymaster.cc";
 const READY_TIMEOUT_MS = 10_000;
@@ -88,6 +99,36 @@ interface ConfirmDialog {
   cancelLabel: string;
 }
 
+/**
+ * 页面内命名弹层的输入定义。
+ * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.5 / 4.6 / 6 章）：
+ *   - 三类动作（新建文件夹 / 重命名文件夹 / 重命名 note）共用同一个弹层组件；
+ *   - 弹层内部 `validate` 由 App 注入，确保重命名阻断 / 新建自动补编号的语义区分；
+ *   - onConfirm 拿到的是用户最终提交值；App 决定是否补编号、如何落库。
+ */
+type NameDialogMode =
+  | {
+      kind: "create-folder";
+      parentId: string | null;
+    }
+  | {
+      kind: "rename-folder";
+      folderId: string;
+    }
+  | {
+      kind: "rename-note";
+      noteId: string;
+    };
+
+interface NameDialogState {
+  mode: NameDialogMode;
+  title: string;
+  description?: string;
+  initialValue: string;
+  placeholder?: string;
+  confirmLabel: string;
+}
+
 export default function App() {
   const currentOrigin = typeof window === "undefined" ? "" : window.location.origin;
 
@@ -124,6 +165,8 @@ export default function App() {
     | null
   >(null);
   const [moveState, setMoveState] = useState<MoveState | null>(null);
+  /** 页面内命名弹层：null = 不显示。 */
+  const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
 
   const decryptedCacheRef = useRef<DecryptedCache | null>(null);
   const sessionRef = useRef<PopupSessionClient | null>(null);
@@ -389,22 +432,26 @@ export default function App() {
    * 显式给出 parentId 的入口——右键菜单走这条，避免 `setSelection` 异步生效
    * 导致新建位置回退到"之前选中的位置"。
    * 未传 override 时，回退到 `resolveCreateParent()`（用于顶部 + note / + 文件夹 按钮）。
+   *
+   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.4 / 4.5 章）：
+   *   - 新建 note 走默认基名 `新 note`；同目录已有同名时自动按 `新 note 2`、`新 note 3` ... 递增；
+   *   - "同目录"判断同时覆盖 `space.notes` 与 `pendingDrafts`，避免 UI 上看见重名但检查没算进去；
+   *   - note **不**弹输入框，直接创建。
    */
   function handleCreateNote(parentIdOverride?: string | null) {
     if (!identity) return;
     const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
+    // 1. 收集同目录下已有 note 的标题（persisted + pending）。
+    const taken = collectNoteTitlesInFolder(parentId);
+    // 2. 自动补编号。
+    const title = findAvailableName(DEFAULT_NOTE_BASE_NAME, taken);
     const now = Date.now();
     const id = cryptoRandomId();
-    // 同目录重名检查：space.notes + pendingDrafts 都要纳入。
-    if (isNoteTitleConflictMerged(space.notes, pendingDrafts, parentId, "新 note", null)) {
-      setLastError("新建 note 失败：同目录下已有同名 note。");
-      return;
-    }
     const draftNote: StoredNoteRecord = {
       v: 2,
       id,
       folderId: parentId,
-      title: "新 note",
+      title,
       tags: [],
       createdAt: now,
       updatedAt: now,
@@ -424,46 +471,105 @@ export default function App() {
     decryptedCacheRef.current = null;
   }
 
+  /**
+   * 在指定的父目录下，合并 persisted 与 pending，收集所有 note 的 title。
+   * 用于"新建 note 时自动补编号"。
+   */
+  function collectNoteTitlesInFolder(folderId: string | null): string[] {
+    const out: string[] = [];
+    for (const n of Object.values(space.notes)) {
+      if (n.folderId === folderId) out.push(n.title);
+    }
+    for (const n of Object.values(pendingDrafts)) {
+      if (n.folderId === folderId) out.push(n.title);
+    }
+    return out;
+  }
+
+  /**
+   * 在指定的父目录下，收集所有 folder 的 title。
+   * 用于"新建 folder 时自动补编号"。
+   */
+  function collectFolderTitlesInParent(parentId: string | null): string[] {
+    const out: string[] = [];
+    for (const f of Object.values(space.folders)) {
+      if (f.parentId === parentId) out.push(f.title);
+    }
+    return out;
+  }
+
+  /**
+   * 新建文件夹：先开页面内命名弹层，让用户输入名字再真正创建。
+   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.5 / 6.8 / 6.9 章）：
+   *   - 不再"先创建默认名，再立刻弹重命名"；
+   *   - 不再用 `window.prompt`；
+   *   - 用户在弹层中输入的值 `trim` 后若非空，再走"自动补编号"；
+   *   - 取消 / 关闭弹层 = 没发生过，不改 selection / draft / space。
+   */
   function handleCreateFolder(parentIdOverride?: string | null) {
     if (!identity) return;
     const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
-    const result = createFolder(space, { parentId, title: "新文件夹" });
-    if (!result) {
-      setLastError("新建文件夹失败：同目录下已有同名文件夹。");
-      return;
-    }
-    commitSpace(result.next);
-    setLastError(null);
-    setSelection({ kind: "folder", id: result.folder.id });
-    setDraft(null);
-  }
-
-  function handleRenameFolder(folderId: string, title: string) {
-    const trimmed = title.trim();
-    if (trimmed.length === 0) {
-      setLastError("文件夹名不能为空。");
-      return;
-    }
-    const result = renameFolder(space, folderId, trimmed);
-    if (!result) {
-      setLastError("重命名失败：同目录下已有同名文件夹。");
-      return;
-    }
-    commitSpace(result.next);
+    setNameDialog({
+      mode: { kind: "create-folder", parentId },
+      title: "新建文件夹",
+      description: "输入文件夹名。若与同父目录下已有文件夹重名，将自动补编号。",
+      initialValue: DEFAULT_FOLDER_BASE_NAME,
+      placeholder: "文件夹名",
+      confirmLabel: "创建"
+    });
     setLastError(null);
   }
 
-  function handleRenameNote(noteId: string, title: string) {
-    const trimmed = title.trim();
-    if (trimmed.length === 0) {
-      setLastError("文件名（标题）不能为空。");
+  /**
+   * 弹层确认回调：
+   *   - "新建文件夹"：trim 后走 `findAvailableName` 自动补编号，然后创建；
+   *   - "重命名文件夹 / 重命名 note"：trim 后直接走持久层；重名由 validate 阻断，
+   *     这里只处理成功路径。
+   */
+  function handleNameDialogConfirm(value: string) {
+    const dialog = nameDialog;
+    if (!dialog) return;
+    if (dialog.mode.kind === "create-folder") {
+      const trimmed = value.trim();
+      const taken = collectFolderTitlesInParent(dialog.mode.parentId);
+      const finalTitle = findAvailableName(trimmed, taken);
+      const result = createFolder(space, { parentId: dialog.mode.parentId, title: finalTitle });
+      if (!result) {
+        // 极端兜底：自动补编号理论上不会触发冲突，但保险起见保留路径。
+        setLastError("新建文件夹失败：未知原因。");
+        setNameDialog(null);
+        return;
+      }
+      commitSpace(result.next);
+      setLastError(null);
+      setSelection({ kind: "folder", id: result.folder.id });
+      setDraft(null);
+      setNameDialog(null);
       return;
     }
+    if (dialog.mode.kind === "rename-folder") {
+      const trimmed = value.trim();
+      const result = renameFolder(space, dialog.mode.folderId, trimmed);
+      if (!result) {
+        // 阻断已在弹层内做了 inline 提示，正常路径下不会进来。
+        setLastError("重命名失败：同目录下已有同名文件夹。");
+        setNameDialog(null);
+        return;
+      }
+      commitSpace(result.next);
+      setLastError(null);
+      setNameDialog(null);
+      return;
+    }
+    // rename-note
+    const trimmed = value.trim();
+    const noteId = dialog.mode.noteId;
     // pending draft
     if (pendingDrafts[noteId]) {
       const target = pendingDrafts[noteId];
       if (isNoteTitleConflictMerged(space.notes, pendingDrafts, target.folderId, trimmed, noteId)) {
         setLastError("重命名失败：同目录下已有同名 note。");
+        setNameDialog(null);
         return;
       }
       setPendingDrafts((prev) => ({
@@ -474,12 +580,17 @@ export default function App() {
         setDraft({ ...draft, title: trimmed });
       }
       setLastError(null);
+      setNameDialog(null);
       return;
     }
     const target = space.notes[noteId];
-    if (!target) return;
+    if (!target) {
+      setNameDialog(null);
+      return;
+    }
     if (isNoteTitleConflict(space.notes, target.folderId, trimmed, noteId)) {
       setLastError("重命名失败：同目录下已有同名 note。");
+      setNameDialog(null);
       return;
     }
     const updated: StoredNoteRecord = { ...target, title: trimmed, updatedAt: Date.now() };
@@ -488,6 +599,44 @@ export default function App() {
       setDraft({ ...draft, title: trimmed });
     }
     setLastError(null);
+    setNameDialog(null);
+  }
+
+  /**
+   * 弹层关闭 / 取消回调：当作没发生过。
+   * 设计缘由（施工单 7.6 章）：不改 selection / draft / space / pendingDrafts。
+   */
+  function handleNameDialogCancel() {
+    setNameDialog(null);
+  }
+
+  /**
+   * 弹层内联校验：
+   *   - 重命名 folder / note：trim 后若与同父目录已有记录（排除自己）重名 → 阻断文案；
+   *   - 新建 folder：弹层**不**阻断重名（直接交给自动补编号），所以 validate 返回 null。
+   * 这里的语义必须分清：自动补编号 vs 阻断。
+   */
+  function validateNameDialogValue(value: string): string | null {
+    const dialog = nameDialog;
+    if (!dialog) return null;
+    if (dialog.mode.kind === "create-folder") {
+      return null;
+    }
+    if (dialog.mode.kind === "rename-folder") {
+      const target = space.folders[dialog.mode.folderId];
+      if (!target) return null;
+      if (isFolderTitleConflict(space.folders, target.parentId, value, dialog.mode.folderId)) {
+        return "同父目录下已有同名文件夹。";
+      }
+      return null;
+    }
+    // rename-note
+    const target = space.notes[dialog.mode.noteId] ?? pendingDrafts[dialog.mode.noteId];
+    if (!target) return null;
+    if (isNoteTitleConflictMerged(space.notes, pendingDrafts, target.folderId, value, dialog.mode.noteId)) {
+      return "同目录下已有同名 note。";
+    }
+    return null;
   }
 
   function handleDeleteFolder(folderId: string) {
@@ -586,6 +735,18 @@ export default function App() {
 
   /* ============== 保存 ============== */
 
+  /**
+   * 保存链路：**原地 patch**。
+   *
+   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.1 / 5.1 / 6.6 / 6.7 章）：
+   *   - 保存成功后**不**重新走 `openNote`、**不**把 draft 先置空再回填、**不**改 selection；
+   *   - 步骤顺序必须为：
+   *       (1) 同步 `decryptedCacheRef`；
+   *       (2) 把 record 写入 space + 持久层；
+   *       (3) 若是 pending note，从 `pendingDrafts` 移除（避免重新触发选中 effect）；
+   *       (4) 仅 patch 当前 `draft` 的元数据（id / title / tags），markdown 保留。
+   *   - 这条顺序必须保证 hydration effect 不会把刚保存好的当前 draft 又覆盖掉。
+   */
   async function handleSave() {
     if (!identity || !draft) return;
     // 解密失败：禁止保存（不覆盖密文）。
@@ -612,13 +773,15 @@ export default function App() {
       setLastError(`保存失败：当前目录下已有同名 note "${titleCheck.title}"。`);
       return;
     }
+    // 抓一份加密前的 draft：失败时仍按这份原样展示。
+    const draftAtSave = draft;
     setLastError(null);
     try {
       const session = getSessionClient();
       const request = buildCipherEncryptRequest({
         text: "向 Notes Demo 加密当前 note 的 markdown",
         contentType: NOTE_CONTENT_TYPE,
-        markdown: draft.markdown,
+        markdown: draftAtSave.markdown,
         requestId: makeRequestId()
       });
       const response = await session.runRequest(request);
@@ -633,7 +796,7 @@ export default function App() {
         id: existing?.id ?? cryptoRandomId(),
         folderId: folderIdForCheck,
         title: titleCheck.title,
-        tags: normalizeTags(draft.tags),
+        tags: normalizeTags(draftAtSave.tags),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         cipher: {
@@ -643,9 +806,13 @@ export default function App() {
         }
       };
       const next = putNote(space, record);
-      // 真值已带密文：落库；同时把这条 note 从 in-memory pendingDrafts 移除。
+      // (1) 先同步解密缓存。
+      decryptedCacheRef.current = { noteId: record.id, markdown: draftAtSave.markdown };
+      // (2) 写入 space + 持久层。
       setSpace(next);
-      if (identity) saveOwnerSpace(identity.publicKeyHex, next);
+      saveOwnerSpace(identity.publicKeyHex, next);
+      // (3) 若是 pending note，从 in-memory pendingDrafts 移除。
+      //    顺序：先 setSpace 再 setPendingDrafts，避免 hydration effect 看到中间态。
       if (isPending && noteId !== null) {
         setPendingDrafts((prev) => {
           const c = { ...prev };
@@ -653,16 +820,20 @@ export default function App() {
           return c;
         });
       }
-      decryptedCacheRef.current = { noteId: record.id, markdown: draft.markdown };
-      setSelection({ kind: "note", id: record.id });
+      // (4) 原地 patch 当前 draft：
+      //    - id：pending → persisted 后变化；
+      //    - title / tags：保存后用最终值；
+      //    - markdown：保留刚保存的明文，**不**清空；
+      //    - selection / pendingDrafts 已经在上一步同步；本步**不**再触发重新打开链路。
       setDraft({
         noteId: record.id,
         title: record.title,
         tags: [...record.tags],
-        markdown: draft.markdown,
+        markdown: draftAtSave.markdown,
         decryptFailed: false
       });
     } catch (err) {
+      // 失败：当前 draft 保持原样，不清空编辑器、不清空选择状态。
       setLastError(formatTransportError(err));
     }
   }
@@ -760,20 +931,42 @@ export default function App() {
     setMoveState(null);
   }
 
+  /**
+   * 触发"重命名文件夹"：开页面内命名弹层；不再使用 `window.prompt`。
+   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.6 / 6.9 章）：
+   *   - 同一页面不能并存"自定义命名弹层"与 `window.prompt`；
+   *   - 重命名时若重名阻断并提示，**不**自动补编号。
+   */
   function promptRenameFolder(folderId: string) {
     const target = getFolder(space, folderId);
     if (!target) return;
-    const next = window.prompt("重命名文件夹", target.title);
-    if (next === null) return;
-    handleRenameFolder(folderId, next);
+    setNameDialog({
+      mode: { kind: "rename-folder", folderId },
+      title: "重命名文件夹",
+      description: "输入新文件夹名。若与同父目录下已有文件夹重名，将阻断。",
+      initialValue: target.title,
+      placeholder: "文件夹名",
+      confirmLabel: "确认"
+    });
+    setLastError(null);
   }
 
+  /**
+   * 触发"重命名 note"：开页面内命名弹层；不再使用 `window.prompt`。
+   * 初始值优先取持久化 record；若 note 是 pending draft（仅 in-memory），用 draft 的 title。
+   */
   function promptRenameNote(noteId: string) {
-    const target = getNote(space, noteId);
+    const target = getNote(space, noteId) ?? pendingDrafts[noteId];
     if (!target) return;
-    const next = window.prompt("重命名 note", target.title);
-    if (next === null) return;
-    handleRenameNote(noteId, next);
+    setNameDialog({
+      mode: { kind: "rename-note", noteId },
+      title: "重命名 note",
+      description: "输入新文件名（标题）。若与同目录下已有 note 重名，将阻断。",
+      initialValue: target.title,
+      placeholder: "文件名",
+      confirmLabel: "确认"
+    });
+    setLastError(null);
   }
 
   /* ============== 拖拽 ============== */
@@ -934,6 +1127,7 @@ export default function App() {
     setMoveState(null);
     setPendingDialog(null);
     setConfirmDialog(null);
+    setNameDialog(null);
     decryptedCacheRef.current = null;
     setLastError(null);
     setSearchQuery("");
@@ -1160,6 +1354,19 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
+      {nameDialog ? (
+        <NameInputDialog
+          title={nameDialog.title}
+          description={nameDialog.description}
+          initialValue={nameDialog.initialValue}
+          placeholder={nameDialog.placeholder}
+          confirmLabel={nameDialog.confirmLabel}
+          validate={validateNameDialogValue}
+          onConfirm={handleNameDialogConfirm}
+          onCancel={handleNameDialogCancel}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1185,6 +1392,17 @@ function truncate(value: string, head: number): string {
   return `${value.slice(0, head)}…${value.slice(-4)}`;
 }
 
+/**
+ * dirty 判定：区分"已持久化 note"与"pending note"两种基线。
+ *
+ * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.2 / 5.2 章）：
+ *   - 已持久化 note：markdown 基线来自解密缓存 `cached.markdown`；
+ *   - pending note（首次保存前）：markdown 基线 = 空字符串，
+ *     不能因为没有 persisted cipher 就把 markdown 变化忽略掉。
+ *     这是修复"新建 note 只改 markdown 时 save 按钮不亮"的关键。
+ *   - 整体判断**不**依赖 tag 是否为空；tag 可空。
+ *   - pendingDrafts **不**持久化明文 markdown；不在这里读 pending 做 markdown 比对。
+ */
 function draftHasChanges(
   space: StoredNotesSpace,
   pending: Record<string, StoredNoteRecord>,
@@ -1196,13 +1414,23 @@ function draftHasChanges(
   if (noteId === null) {
     return draft.title.length > 0 || draft.tags.length > 0 || draft.markdown.length > 0;
   }
-  const record = space.notes[noteId] ?? pending[noteId];
-  if (!record) return true;
+  const persisted = space.notes[noteId];
+  const isPending = persisted === undefined;
+  if (!persisted && !pending[noteId]) return true;
+  // 共有：title / tags 跟 record 比对（pending record / persisted record 都行）。
+  const record = persisted ?? pending[noteId]!;
   if (draft.title !== record.title) return true;
   if (draft.tags.join(",") !== record.tags.join(",")) return true;
+  // markdown 基线按 isPending 区分。
+  if (isPending) {
+    // pending note 尚未保存过：markdown 基线 = 空字符串。
+    return draft.markdown.length > 0;
+  }
+  // 已持久化：基线来自解密缓存（与该 noteId 一致时）。
   if (cached && cached.noteId === noteId) {
     return cached.markdown !== draft.markdown;
   }
+  // 没缓存：保守起见视为未变化（hydration 进行中）。
   return false;
 }
 

@@ -866,6 +866,103 @@ code {
   gap: 8px;
 }
 
+/* ============== tag input (chip) ============== */
+
+.tag-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tag-input.is-disabled {
+  opacity: 0.7;
+}
+
+.tag-input__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 32px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 4px 6px;
+  cursor: text;
+}
+
+.tag-input__chips:focus-within {
+  border-color: var(--color-accent);
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border: 1px solid rgba(35, 131, 226, 0.2);
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 100%;
+}
+
+.tag-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.tag-chip__remove {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tag-chip__remove:hover:not(:disabled) {
+  background: rgba(35, 131, 226, 0.18);
+}
+
+.tag-chip__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.tag-input__field {
+  appearance: none;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  min-width: 120px;
+  flex: 1 1 120px;
+  padding: 2px 4px;
+  color: var(--color-text);
+}
+
+.tag-input__field::placeholder {
+  color: var(--color-text-muted);
+}
+
+.tag-input__field:disabled {
+  cursor: not-allowed;
+}
+
+.tag-input__hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
 /* ============== confirm dialog ============== */
 
 .confirm-dialog {
@@ -902,6 +999,81 @@ code {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* ============== name dialog (新建文件夹 / 重命名) ============== */
+
+.name-dialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.name-dialog__box {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  width: min(420px, calc(100% - 32px));
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.name-dialog__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.name-dialog__description {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text-soft);
+}
+
+.name-dialog__input {
+  appearance: none;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  outline: none;
+  font-size: 14px;
+  color: var(--color-text);
+  transition: border-color 0.12s ease;
+}
+
+.name-dialog__input:focus {
+  border-color: var(--color-accent);
+}
+
+.name-dialog__input[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+
+.name-dialog__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-error);
+  background: var(--color-error-soft);
+  border: 1px solid rgba(212, 76, 71, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+.name-dialog__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 
 /* ============== responsive ============== */

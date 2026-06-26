@@ -116,10 +116,7 @@ export const MAX_TAG_LENGTH = 32;
 export function normalizeTags(raw: string[] | string | undefined | null): string[] {
   const list = Array.isArray(raw)
     ? raw
-    : (raw ?? "")
-        .split(/[,，\s\n]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    : splitTagTokens(raw ?? "");
   const seen = new Set<string>();
   const out: string[] = [];
   for (const tag of list) {
@@ -133,6 +130,22 @@ export function normalizeTags(raw: string[] | string | undefined | null): string
     if (out.length >= MAX_TAGS_PER_NOTE) break;
   }
   return out;
+}
+
+/**
+ * 把一段文本按 tag 分隔符切成原始 token 数组（**不**做 trim / 小写 / 去重 / 长度截断）。
+ * 分隔符：半角逗号 `,`、全角逗号 `，`、空格（含全角空格）、换行、tab。
+ * 用途：TagInput 控件在用户敲回车 / 逗号 / 空格 / 粘贴多 tag 时调用。
+ *
+ * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.3 / 7.2 章）：
+ *   - 控件内部只把 `splitTagTokens` 当作"按分隔符切段"的工具；
+ *   - 规范化（trim / 小写 / 去重 / 长度 / 数量上限）继续走 `normalizeTags`，
+ *     保证全应用 tag 规则单真值。
+ *   - 连续分隔符 / 前后空白直接产生空 token，留给调用方丢弃。
+ */
+export function splitTagTokens(raw: string): string[] {
+  if (!raw) return [];
+  return raw.split(/[,，\s\n\t]+/);
 }
 
 /* ============== editor draft ============== */

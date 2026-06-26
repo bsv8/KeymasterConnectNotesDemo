@@ -1,21 +1,23 @@
 // src/components/NoteInspector.tsx
 // 右侧 note / folder 元数据面板。
 //
-// 设计缘由（施工单第 12.7 节）：
+// 设计缘由（施工单第 12.7 节 + 2026-06-26 save-tag-folder-ux）：
 //   - **不再**包含 title 编辑——title（文件名）已经在 editor-stage 顶部输入框承担。
 //   - **不再**包含 path 编辑——folder/note 通过右键菜单 / 拖拽移动，路径是派生量。
 //   - 仅保留：
-//       - tag（明文，本地聚合用）；
+//       - tag（明文，本地聚合用）：改用 `TagInput` chip 控件；
 //       - 时间信息（created / updated）；
 //       - 加密状态（密文长度、contentType）；
 //       - 保存 / 删除 / 放弃修改 三个动作。
 //   - folder 选中态：显示 folder 元信息 + 删除按钮（删除前由 App 校验 isFolderEmpty）。
 //   - `decryptFailed` 时所有编辑入口禁用；删除仍然允许——这是修复"请删除本条"提示的关键。
-//   - tag 规则：写入前 `trim` → 过滤空 → 转小写 → 去重 → 截断到上限（详见 `notes.ts`）。
+//   - tag 控件自身的规范化继续走 `notes.ts`（trim / 小写 / 去重 / 截断）；控件不重复规则。
+//   - save 按钮亮灭规则：tag **不**是必填项；是否可点只取决于 title 合法 + dirty。
 
 import { useMemo } from "react";
 import type { NoteDraft, StoredFolderRecord, StoredNoteRecord } from "../lib/notes";
-import { MAX_TAGS_PER_NOTE, normalizeTags, validateTitle } from "../lib/notes";
+import { validateTitle } from "../lib/notes";
+import { TagInput } from "./TagInput";
 
 export interface NoteInspectorProps {
   /** 当前 note 的 draft；folder 选中时为 null。 */
@@ -90,8 +92,9 @@ export function NoteInspector(props: NoteInspectorProps) {
 
   if (!props.draft) return null;
 
-  const tagDraftText = useMemo(() => props.draft!.tags.join(", "), [props.draft]);
   const titleCheck = useMemo(() => validateTitle(props.draft!.title), [props.draft]);
+  // save 亮灭：title 合法 + 非 decryptFailed + 有修改；
+  // tag 长度在这里**不**参与判定——tag 为空也应允许保存。
   const canSave =
     !props.decryptFailed && props.canEdit && titleCheck.ok && props.isDirty;
 
@@ -105,15 +108,12 @@ export function NoteInspector(props: NoteInspectorProps) {
 
       <div className="inspector-section">
         <h3>标签</h3>
-        <input
-          type="text"
-          value={tagDraftText}
-          onChange={(e) => props.onChangeTags(normalizeTags(e.target.value))}
-          placeholder={`用半角逗号、全角逗号或空格分隔；最多 ${MAX_TAGS_PER_NOTE} 个`}
+        <TagInput
+          value={props.draft.tags}
+          onChange={props.onChangeTags}
           disabled={!props.canEdit}
-          spellCheck={false}
         />
-        <p className="inspector-hint">tag 明文存储，用于本地搜索。</p>
+        <p className="inspector-hint">tag 明文存储，用于本地搜索；可为空。</p>
       </div>
 
       <div className="inspector-section">

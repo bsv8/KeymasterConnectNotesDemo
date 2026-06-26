@@ -295,6 +295,40 @@ export function findNoteIdsByTag(notes: Record<string, StoredNoteRecord>, tag: s
   return out;
 }
 
+/* ============== 同目录可用名（自动补编号） ============== */
+
+/**
+ * 在同一父目录下，从已存在的同类型 title 集合里挑出第一个可用名。
+ * 用法：新建 note / 新建 folder 时若用户提交值重名，则走 `findAvailableName`。
+ *
+ * 规则：
+ *   - `base` 未被占用 → 直接返回 `base`；
+ *   - 否则按 `base 2`、`base 3` ... 递增，直到找到未被占用的名字；
+ *   - 比较时 `trim` 后精确相等（不区分大小写，不归一化），
+ *     占用集合由调用方传入，不在这一层做持久层 / 内存态合并判断。
+ *
+ * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.4 / 4.5 / 6.10 章）：
+ *   - 自动补编号只用于"创建"，**不**用于"重命名"——重命名调用方必须自己做冲突阻断。
+ *   - 这一层不读持久层，由 App 合并 `space.notes + pendingDrafts` 后再传入。
+ */
+export function findAvailableName(base: string, takenTitles: Iterable<string>): string {
+  const trimmed = base.trim();
+  if (trimmed.length === 0) return trimmed;
+  const taken = new Set<string>();
+  for (const t of takenTitles) {
+    taken.add(t.trim());
+  }
+  if (!taken.has(trimmed)) return trimmed;
+  let n = 2;
+  // 防御性上限：超过 10000 次直接放弃；正常不会触发。
+  while (n < 10000) {
+    const candidate = `${trimmed} ${n}`;
+    if (!taken.has(candidate)) return candidate;
+    n += 1;
+  }
+  return `${trimmed} ${Date.now()}`;
+}
+
 /* ============== id 生成 ============== */
 
 function makeRecordId(): string {
