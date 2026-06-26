@@ -1,13 +1,13 @@
 // src/App.tsx
 // Notes Demo 页面级状态与编排。
 //
-// 设计缘由（施工单第 4-10 章）：
-//   - 状态真值集中在 App；组件只接 props / onChange。
-//   - 选中模型改成"文件夹或笔记二选一"：`selectedFolderId` 或 `selectedNoteId`。
-//     它们由 `selection: { kind: "folder" | "note"; id: string | null }` 统一表达。
-//   - root 是虚拟节点：用 `null` 表达"根目录 / 当前没选中具体实体"。
-//   - 所有 folder/note 操作（创建 / 重命名 / 移动 / 删除）收口在 App 这一层；
-//     sidebar / inspector 只发出动作意图。
+// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 4-10 章）：
+//   - 页面顶层固定二态：`identity === null` 时只渲染 `LockScreen`；
+//     `identity !== null` 时才渲染 notes 工作区。
+//   - 不在初始化时自动恢复 identity；刷新页面回到 LockScreen 是预期行为，不是缺陷。
+//   - 登录成功后按 `identity.publicKeyHex` 调 `loadOwnerSpace`。
+//   - "切换身份 / 更换登录器" 退回 LockScreen 时统一收口清空 notes 工作区内存态。
+//   - 选中 / 右键菜单 / 拖拽 / 解密缓存等真值仍然集中在 App 这一层。
 //   - 解密失败：note 仍保留；metadata 锁死；删除仍然允许。
 //   - 右键菜单 / 拖拽状态集中在这里管理；sidebar 只负责"显示 + 触发"。
 
@@ -46,6 +46,7 @@ import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
 import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
 import { NoteInspector } from "./components/NoteInspector";
+import { LockScreen } from "./components/LockScreen";
 
 const DEFAULT_TARGET_ORIGIN = "https://keymaster.cc";
 const READY_TIMEOUT_MS = 10_000;
@@ -901,8 +902,61 @@ export default function App() {
 
   const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
 
-  /* ============== 渲染 ============== */
+  /* ============== 切换身份 / 更换登录器 ============== */
 
+  /**
+   * 退回 LockScreen 时统一收口清空 notes 工作区内存态：
+   * - identity 置空；
+   * - 当前 space 置空；
+   * - pendingDrafts 置空；
+   * - selection / draft / 右键菜单 / 拖拽态 / move 态全清；
+   * - 解密缓存清空；
+   * - pendingDialog / confirmDialog 弹窗态全清——否则旧弹窗会在下一次
+   *   登录后重新出现，污染新 owner 的工作区。
+   *
+   * 不删除 localStorage 中已有 owner 分区数据。
+   */
+  function handleSwitchIdentity() {
+    // 关掉已有 session，确保 popup 不再持有 in-flight request。
+    sessionRef.current?.closeSession();
+    sessionRef.current = null;
+    setPopupState("idle");
+    setIdentity(null);
+    setSpace({ v: 1, folders: {}, notes: {} });
+    setPendingDrafts({});
+    setSelection({ kind: "root", id: null });
+    setDraft(null);
+    setDecryptError(null);
+    setContextMenu(null);
+    setDragging(null);
+    setDropHover(null);
+    setMoveState(null);
+    setPendingDialog(null);
+    setConfirmDialog(null);
+    decryptedCacheRef.current = null;
+    setLastError(null);
+    setSearchQuery("");
+    setActiveTag(null);
+  }
+
+  /* ============== 顶层渲染 ============== */
+
+  // 未登录态：只渲染 LockScreen；不显示 notes 工作区任何部分。
+  if (!identity) {
+    return (
+      <LockScreen
+        targetInput={targetOrigin}
+        defaultTargetOrigin={DEFAULT_TARGET_ORIGIN}
+        lastError={lastError}
+        isLoggingIn={isLoggingIn}
+        onTargetInputChange={setTargetOrigin}
+        onUseDefault={() => setTargetOrigin(DEFAULT_TARGET_ORIGIN)}
+        onLogin={() => void handleLogin()}
+      />
+    );
+  }
+
+  // 已登录态：渲染完整 notes 工作区。
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -920,16 +974,7 @@ export default function App() {
           lastError={lastError}
           isLoggingIn={isLoggingIn}
           onLogin={() => void handleLogin()}
-          onForget={() => {
-            setIdentity(null);
-            setPopupState("idle");
-            setSelection({ kind: "root", id: null });
-            setDraft(null);
-            setSpace({ v: 1, folders: {}, notes: {} });
-            setPendingDrafts({});
-            decryptedCacheRef.current = null;
-            setLastError(null);
-          }}
+          onForget={handleSwitchIdentity}
         />
       </header>
 
@@ -991,19 +1036,10 @@ export default function App() {
             </>
           ) : (
             <div className="editor-stage__empty">
-              {identity ? (
-                <>
-                  <h2>选择或新建一个 note</h2>
-                  <p>
-                    左侧选择文件夹或 note；右键文件夹可新建 / 删除 / 移动；右键 note 可重命名 / 移动 / 删除。
-                  </p>
-                </>
-              ) : (
-                <>
-                  <h2>请先登录</h2>
-                  <p>点击右上角的 <strong>登录</strong> 按钮，调用 <code>identity.get</code>。</p>
-                </>
-              )}
+              <h2>选择或新建一个 note</h2>
+              <p>
+                左侧选择文件夹或 note；右键文件夹可新建 / 删除 / 移动；右键 note 可重命名 / 移动 / 删除。
+              </p>
             </div>
           )}
         </section>

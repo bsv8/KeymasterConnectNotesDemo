@@ -5,7 +5,7 @@
 ## 项目定位
 
 这是一个**外部调用方 demo**：单页前端，真值由 Keymaster 提供。它**不是**产品原型，
-**不是**协作工具，**不是**离线缓存容器。
+**不是**协作工具，**不是**离线缓存容器，**不是**某个 Keymaster 厂商的专属产品。
 
 我们只做一件事：证明一个最小外部站点能
 
@@ -13,7 +13,39 @@
 - 用 `cipher.encrypt` / `cipher.decrypt` 真实加解密笔记正文；
 - 用 folder/note 显式实体管理笔记结构；
 - 把密文 + 元数据落到本地 KV；
-- 在不缓存明文的前提下，仍能保持"打开 → 编辑 → 保存"的闭环。
+- 在不缓存明文的前提下，仍能保持"打开 → 编辑 → 保存"的闭环；
+- 让用户选择**任意实现相同协议**的登录器（不再写死 Keymaster）。
+
+## 页面结构（硬切换后）
+
+页面顶层固定两态：
+
+- 未登录：渲染 `LockScreen`（登录壳）。
+- 已登录：渲染 `Notes` 工作区。
+
+不允许出现"未登录但显示 notes 工作区外壳"或"已登录但不渲染任何笔记内容"的
+中间态。
+
+### LockScreen
+
+只承担三件事：
+
+- 产品介绍 + 协议能力说明；
+- 用户输入或确认 `target origin / url`；
+- 大号登录按钮 + 最近错误展示。
+
+明确不展示任何 owner 数据摘要、文件树预览、最近登录记录。
+
+### Notes 工作区
+
+只在 `identity !== null` 时渲染；沿用之前的 sidebar / editor / inspector 三栏。
+页头 `ConnectStatus` 提供：
+
+- `page origin` / `target origin` / `publicKey` / `last login` 信息；
+- 重新登录按钮；
+- **切换身份 / 更换登录器** 按钮，点击后立即退回 LockScreen，并清空内存中
+  notes 工作区态（selection / draft / drag / move / 解密缓存 / pendingDrafts 等），
+  但**不**删除 localStorage 中已有 owner 分区数据。
 
 ## 启动方式
 
@@ -39,8 +71,57 @@ npm run preview      # 预览生产构建
 
 不接入 `intent.sign` / `p2pkh.transfer` / `feepool.*` 等其它能力。
 
-target origin 默认为 `https://keymaster.cc`；本地调试可在 Keymaster popup
-部署到自己的 target 后修改。
+## 自定义登录器（target origin）
+
+LockScreen 上允许用户输入任意 `target origin / url`：
+
+- 输入框可填 `https://keymaster.cc` 之类的完整 URL，也可填可被 `new URL().origin`
+  归一的字符串；
+- 系统最终只使用 `URL().origin`；
+- 默认值仍是 `https://keymaster.cc`，提供"使用默认地址"快捷入口；
+- 非法 URL / 无法归一 → 直接阻断登录，提示 `Target origin 非法。`，
+  不做自动修正、自动 fallback、自动重试。
+
+本 demo 不维护：
+
+- provider 列表 / 收藏夹；
+- 最近使用记录；
+- 协议能力自动探测；
+- popup path 之外的路由发现。
+
+## 刷新行为（硬切换的明确产品定义）
+
+刷新页面后：
+
+- 回到 `LockScreen`；
+- 不恢复 identity；
+- 不加载任何 owner 的 notes 空间。
+
+这是硬切换后的明确产品定义，不是缺陷。本 demo **不**支持：
+
+- identity 快照持久化；
+- 页面启动自动恢复 identity；
+- "未登录但显示上次 owner 文件树"的半状态。
+
+## owner 分区边界
+
+notes 数据空间只按 `ownerPublicKeyHex` 分区：
+
+```txt
+notes-demo:owner:{publicKeyHex}
+```
+
+`target origin` **不**参与分区：
+
+- 同一个 owner 在不同登录器下命中同一份本地数据；
+- 不同登录器返回同一个 owner 时，会看到同一棵树；
+- 不同登录器返回不同 owner 时，看到对应 owner 的数据或空树。
+
+"同 owner"仅保证本地命中同一分区，**不**保证一定能成功解密：
+
+- 同 owner + 同私钥 + 协议兼容 → 正常打开 / 保存正文；
+- 同 owner + 不能解密 → 左侧树仍可见，点击 note 进入"无法解密"态；
+- 原密文不会被覆盖，note 仍允许删除。
 
 ## 数据模型
 
@@ -167,22 +248,30 @@ record 自身不重复携带 owner。
 ## 手工验收步骤
 
 1. `npm run dev` 启动；
-2. 打开页面，点击右上角 **登录** → 浏览器应弹出 Keymaster popup；
-3. 在 Keymaster 弹窗里确认身份请求；
-4. 回到页面，看到 `subject.publicKey` 摘要 + last login 时间；
-5. 左侧点击 **+ 文件夹** → 根目录下出现新文件夹；
-6. 在文件夹上右键 → 选 `新建 note`；
-7. 编辑区顶部输入文件名；正文输入段落与列表；
-8. 右侧面板把 tags 字段填入 `demo, keymaster`；
-9. 点击 **加密保存** → 触发 `cipher.encrypt`；
-10. 刷新页面 → 左侧树应出现 folder + note；
-11. 点击 note → 触发 `cipher.decrypt` → 编辑器回到原内容；
-12. 右键 note → `删除` → 从树消失；
-13. 在 popup 内取消身份请求 → 页面应显示 `user_rejected` 错误；
-14. 切换 target origin 模拟 `decrypt_failed`：在 Keymaster 内切走 active key
+2. 打开页面，应**只**看到 `LockScreen`：没有文件树、没有编辑器、没有 inspector；
+3. LockScreen 上有 `target origin / url` 输入框 + "使用默认地址" 按钮 + 大号登录按钮；
+4. 输入默认 `https://keymaster.cc` → 点击 **登录** → 浏览器弹出 Keymaster popup；
+5. 在 Keymaster 弹窗里确认身份请求；
+6. 回到页面 → 已进入 notes 工作区，看到 `subject.publicKey` 摘要 + last login 时间 +
+   当前 `target origin`；
+7. 左侧点击 **+ 文件夹** → 根目录下出现新文件夹；
+8. 在文件夹上右键 → 选 `新建 note`；
+9. 编辑区顶部输入文件名；正文输入段落与列表；
+10. 右侧面板把 tags 字段填入 `demo, keymaster`；
+11. 点击 **加密保存** → 触发 `cipher.encrypt`；
+12. **刷新页面** → 应回到 `LockScreen`，左侧树不显示旧数据；
+13. 重新登录 → 同一 owner 的 folder + note 树出现；
+14. 点击 note → 触发 `cipher.decrypt` → 编辑器回到原内容；
+15. 右键 note → `删除` → 从树消失；
+16. 在 popup 内取消身份请求 → 页面应显示 `user_rejected` 错误；
+17. 切换 target origin 模拟 `decrypt_failed`：在 Keymaster 内切走 active key
     或在不同 origin 重新打开 → note 列表仍显示，但点击后进入"无法解密"态；
-15. 在根目录放一个文件夹 + 它的子 note，拖拽 note 到另一文件夹 → 应移动成功；
-16. 在 popup 内取消身份请求 → 页面应显示 `user_rejected` 错误。
+18. 在根目录放一个文件夹 + 它的子 note，拖拽 note 到另一文件夹 → 应移动成功；
+19. 输入 `not a url` 这种非法值 → 登录按钮应被禁用，提示 `Target origin 非法。`；
+20. 已登录态点击 **切换身份 / 更换登录器** → 立即回到 `LockScreen`，
+    当前编辑区 / 选中态 / draft / 拖拽态全部清空，但 localStorage 原 owner 数据仍保留；
+21. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
+    相同协议）→ 登录 → 应能进入 notes 工作区，与默认 origin 行为一致。
 
 ## 异常行为对照表
 
@@ -205,7 +294,7 @@ record 自身不重复携带 owner。
 src/
   lib/
     protocol.ts          # 协议类型收口（仅 identity.get + cipher.*）
-    connectClient.ts     # popup transport 原子能力
+    connectClient.ts     # popup transport 原子能力 + normalizeOrigin
     popupSessionClient.ts# 页面级 popup session client
     encoding.ts          # UTF-8 / base64 / hex
     binary.ts            # BinaryField 转换
@@ -214,13 +303,14 @@ src/
     notes.ts             # folder/note record schema + tag/title 规则
     storage.ts           # owner 分区 KV + folder/note CRUD + 冲突检查
   components/
-    ConnectStatus.tsx    # 顶栏连接状态 + 登录按钮
+    LockScreen.tsx       # 未登录态登录壳（产品介绍 + target origin 输入 + 登录按钮）
+    ConnectStatus.tsx    # 已登录态顶栏连接状态 + 重新登录 / 切换身份
     NotesSidebar.tsx     # 左侧 folder/note 树 + 右键菜单 + 拖拽
     NoteEditor.tsx       # BlockNote 包装（markdown 单真值）
     NoteInspector.tsx    # 右侧元数据 + 保存/删除
-  App.tsx                # 状态真值集中地
+  App.tsx                # 状态真值集中地 + LockScreen / Notes 二段式渲染
   main.tsx               # 挂载入口
-  styles.css             # 工作区样式 + 右键菜单 / 拖拽视觉态
+  styles.css             # LockScreen 样式 + 工作区样式 + 右键菜单 / 拖拽视觉态
 ```
 
 ## 不允许的事
@@ -239,4 +329,15 @@ src/
 - 不做自动重试、自动覆盖、重名时静默改名；
 - 不删非空文件夹；
 - 不让右键菜单和拖拽走两套 move 真值逻辑；
-- 不做协作 / 评论 / 版本历史 / 分享链接。
+- 不做协作 / 评论 / 版本历史 / 分享链接；
+- 不在未登录态继续渲染 notes 工作区外壳；
+- 不为"刷新后不断片"而持久化 identity 快照；
+- 不做"未登录但先展示上次 owner 文件树"的半状态；
+- 不把 notes space 改成按 `targetOrigin + owner` 双维度分区；
+- 不把自定义登录器理解成新账号体系；
+- 不把 provider URL 写进 folder / note record；
+- 切换登录器时**不**自动迁移 / 复制 / 重写已有密文；
+- 不会因为 owner 相同就假定一定能解密；
+- 不做自动重试、自动回退默认 origin、自动修正 URL；
+- 不在登录失败后偷偷保留旧工作区继续可见；
+- 不引入多 provider 管理 / 收藏 / 最近记录。

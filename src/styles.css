@@ -1,15 +1,17 @@
 /* src/styles.css
- * Notion 风格工作区样式。
+ * Notion 风格工作区样式 + LockScreen 锁屏样式。
  *
- * 设计缘由（施工单 4.1）：
+ * 设计缘由（施工单 4.1 + 2026-06-26 lock-screen-custom-provider 第 9.7 节）：
  *   - 低对比背景；
  *   - 极细分隔；
  *   - 大量留白；
  *   - 轻量 hover；
  *   - 主编辑区优先级最高。
  *
- * 布局：左 sidebar / 中 editor / 右 inspector。
+ * 布局（已登录态）：左 sidebar / 中 editor / 右 inspector。
  * 顶部 header 收 connect status + login。
+ *
+ * 锁屏（未登录态）：单独一页 lock 页面，不与工作区结构混在一起。
  */
 
 :root {
@@ -915,5 +917,197 @@ code {
     border-right: none;
     border-bottom: 1px solid var(--color-border);
     max-height: 40vh;
+  }
+}
+
+/* ============== lock screen ============== */
+
+.lock-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 32px 16px;
+  background: var(--color-bg);
+}
+
+.lock-screen__panel {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 32px 32px 28px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+}
+
+.lock-screen__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lock-screen__eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+}
+
+.lock-screen__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.lock-screen__subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-soft);
+}
+
+.lock-screen__capabilities {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.lock-screen__capabilities h2 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.lock-screen__capabilities ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lock-screen__capabilities li {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-soft);
+}
+
+.lock-screen__capabilities li code {
+  font-size: 12px;
+}
+
+.lock-screen__form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lock-screen__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lock-screen__field-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.lock-screen__input {
+  appearance: none;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  outline: none;
+  font-size: 14px;
+  color: var(--color-text);
+  transition: border-color 0.12s ease;
+}
+
+.lock-screen__input:focus {
+  border-color: var(--color-accent);
+}
+
+.lock-screen__input[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+
+.lock-screen__input:disabled {
+  background: var(--color-bg-soft);
+  color: var(--color-text-soft);
+}
+
+.lock-screen__field-hint {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.lock-screen__input[aria-invalid="true"] + .lock-screen__field-hint {
+  color: var(--color-error);
+}
+
+.lock-screen__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lock-screen__login {
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+.lock-screen__error {
+  padding: 10px 12px;
+  background: var(--color-error-soft);
+  border: 1px solid rgba(212, 76, 71, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--color-error);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lock-screen__footer {
+  border-top: 1px solid var(--color-border);
+  padding-top: 14px;
+}
+
+.lock-screen__footer p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 600px) {
+  .lock-screen {
+    padding: 16px;
+  }
+  .lock-screen__panel {
+    padding: 22px;
+  }
+  .lock-screen__capabilities li {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 }

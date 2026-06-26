@@ -1,10 +1,12 @@
 // src/components/ConnectStatus.tsx
-// 顶部连接状态 + 最近错误条。
+// notes 页头连接状态条。
 //
-// 设计缘由：
+// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 9.3 节）：
+//   - 只服务于已登录态（notes 页面顶部），不再承担未登录主入口页面职责。
 //   - popup 连接状态机来自 session client（idle / opening / connected / disconnected）。
 //   - 最近错误展示来自 App 持有的"最后一次协议错误"真值。
-//   - 登录按钮由 App 控制：未登录时高亮；已登录时显示当前身份摘要。
+//   - 已登录态按钮文案调整成"重新登录"+"切换身份 / 更换登录器"。
+//   - 未登录态由 `LockScreen` 接管登录入口；本组件不再渲染登录按钮。
 
 import type { ReactNode } from "react";
 
@@ -50,20 +52,16 @@ export function ConnectStatus(props: ConnectStatusProps) {
             <button type="button" className="secondary-button" onClick={props.onLogin} disabled={props.isLoggingIn}>
               重新登录
             </button>
-            <button type="button" className="secondary-button connect-status__forget" onClick={props.onForget}>
-              切换身份
+            <button
+              type="button"
+              className="secondary-button connect-status__forget"
+              onClick={props.onForget}
+              title="退回登录壳；不删除本地数据"
+            >
+              切换身份 / 更换登录器
             </button>
           </>
-        ) : (
-          <button
-            type="button"
-            className="primary-button"
-            onClick={props.onLogin}
-            disabled={props.isLoggingIn}
-          >
-            {props.isLoggingIn ? "拉起 popup..." : "登录"}
-          </button>
-        )}
+        ) : null}
       </div>
 
       {props.lastError ? (
