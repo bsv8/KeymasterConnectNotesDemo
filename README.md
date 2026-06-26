@@ -46,6 +46,30 @@
 - **切换身份 / 更换登录器** 按钮，点击后立即退回 LockScreen，并清空内存中
   notes 工作区态（selection / draft / drag / move / 解密缓存 / pendingDrafts 等），
   但**不**删除 localStorage 中已有 owner 分区数据。
+- **删除当前本地数据** 按钮，点击后走二次确认；确认后删除当前 `publicKey`
+  对应的整个本地 notes 空间（folders + notes + 密文 + 明文 metadata），
+  立即退回 LockScreen。**不会**删除 Keymaster 身份本身。
+
+## 删除当前本地数据（硬切换硬约束）
+
+已登录态页头提供**唯一**删除入口：
+
+- 删除对象 = `localStorage["notes-demo:owner:{publicKeyHex}"]`，**不**递归遍历
+  note / folder；底层 key 本来就不存在时视为成功；
+- 删除成功**后**才执行内存态清空并退回 `LockScreen`，顺序硬约束；
+- 删除失败时**不**退回 `LockScreen`、**不**清空 `identity`、**不**清空工作区，
+  仅展示 `删除当前本地数据失败，请重试。` 错误；
+- 仅删除当前 owner 的本地数据；不删除 Keymaster 身份 / provider 账号 /
+  链上身份 / 其它站点数据；
+- 未登录态 `LockScreen` **不**展示任何删除入口。
+
+`切换身份 / 更换登录器` 与 `删除当前本地数据` 的边界：
+
+- 切换身份：只退回登录壳，**不**删数据；
+- 删除当前本地数据：删当前 owner 整空间，再退回登录壳。
+
+不引入 owner 列表、回收站、软删除、恢复机制、`targetOrigin + owner` 双因子分区、
+IndexedDB / 多数据库方案。
 
 ## 启动方式
 
@@ -270,7 +294,10 @@ record 自身不重复携带 owner。
 19. 输入 `not a url` 这种非法值 → 登录按钮应被禁用，提示 `Target origin 非法。`；
 20. 已登录态点击 **切换身份 / 更换登录器** → 立即回到 `LockScreen`，
     当前编辑区 / 选中态 / draft / 拖拽态全部清空，但 localStorage 原 owner 数据仍保留；
-21. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
+21. 已登录态点击 **删除当前本地数据** → 弹二次确认框（明确说明只删本地数据、
+    不删 Keymaster 身份）→ 确认 → 退回 `LockScreen`；再次登录同一 owner 应看到空树，
+    原数据**不**再恢复；
+22. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
     相同协议）→ 登录 → 应能进入 notes 工作区，与默认 origin 行为一致。
 
 ## 异常行为对照表

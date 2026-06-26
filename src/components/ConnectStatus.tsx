@@ -1,11 +1,14 @@
 // src/components/ConnectStatus.tsx
 // notes 页头连接状态条。
 //
-// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 9.3 节）：
+// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 9.3 节 +
+//          2026-06-26 delete-current-owner-space 第 3.1 / 7.3 节）：
 //   - 只服务于已登录态（notes 页面顶部），不再承担未登录主入口页面职责。
 //   - popup 连接状态机来自 session client（idle / opening / connected / disconnected）。
 //   - 最近错误展示来自 App 持有的"最后一次协议错误"真值。
-//   - 已登录态按钮文案调整成"重新登录"+"切换身份 / 更换登录器"。
+//   - 已登录态按钮区收口三个动作：重新登录 / 切换身份 / 删除当前本地数据。
+//   - "删除当前本地数据"语义上比"切换身份"更强：会清掉当前 owner 本地空间。
+//     因此按钮在视觉上需要明显是危险动作，但仍弱于主操作，不能喧宾夺主。
 //   - 未登录态由 `LockScreen` 接管登录入口；本组件不再渲染登录按钮。
 
 import type { ReactNode } from "react";
@@ -22,6 +25,8 @@ export interface ConnectStatusProps {
   isLoggingIn: boolean;
   onLogin: () => void;
   onForget: () => void;
+  /** 删除当前 owner 本地空间入口；语义与"切换身份"完全不同，必须再走二次确认。 */
+  onDeleteCurrentData: () => void;
 }
 
 export function ConnectStatus(props: ConnectStatusProps) {
@@ -59,6 +64,15 @@ export function ConnectStatus(props: ConnectStatusProps) {
               title="退回登录壳；不删除本地数据"
             >
               切换身份 / 更换登录器
+            </button>
+            <button
+              type="button"
+              className="secondary-button connect-status__delete"
+              onClick={props.onDeleteCurrentData}
+              disabled={props.isLoggingIn}
+              title="删除当前 publicKey 对应的全部本地 notes 数据并退出工作区；不会删除 Keymaster 身份本身"
+            >
+              删除当前本地数据
             </button>
           </>
         ) : null}

@@ -61,6 +61,19 @@ export function saveOwnerSpace(ownerPublicKeyHex: string, space: StoredNotesSpac
   writeStorage(storageKeyForOwner(ownerPublicKeyHex), JSON.stringify(space));
 }
 
+/**
+ * 删除某 owner 名下整个本地 notes 空间（密文 + 明文 metadata + folder 树）。
+ *
+ * 设计缘由（施工单 2026-06-26 delete-current-owner-space 第 3.3 / 4 章）：
+ *   - 删除真值 = `removeStorage(storageKeyForOwner(ownerPublicKeyHex))`。
+ *   - 不递归遍历 folder / note；不做逐条清理（避免部分成功态）。
+ *   - 底层 key 本来不存在时视为成功（用户最终目标 = 当前 owner 本地不再有数据）。
+ *   - 不抛异常；失败返回 false，由调用方决定是否退回 LockScreen。
+ */
+export function deleteOwnerSpace(ownerPublicKeyHex: string): boolean {
+  return removeStorage(storageKeyForOwner(ownerPublicKeyHex));
+}
+
 /* ============== folder CRUD ============== */
 
 export interface CreateFolderInput {
@@ -306,5 +319,23 @@ function writeStorage(key: string, value: string): void {
     globalThis.localStorage?.setItem(key, value);
   } catch (err) {
     console.error("[notes-demo] failed to write storage", err);
+  }
+}
+
+/**
+ * 删除指定 storage key；不抛异常。
+ *
+ * 设计缘由（施工单 2026-06-26 delete-current-owner-space 第 7.1 节）：
+ *   - 不抛异常到上层；上层只关心"成功 / 失败"布尔值，决定是否清空工作区。
+ *   - 底层错误必须 `console.error`，但不能阻塞 UI 给明确失败提示。
+ *   - key 本来就不存在时仍返回 true，与"目标已达成"语义一致。
+ */
+export function removeStorage(key: string): boolean {
+  try {
+    globalThis.localStorage?.removeItem(key);
+    return true;
+  } catch (err) {
+    console.error("[notes-demo] failed to remove storage", err);
+    return false;
   }
 }

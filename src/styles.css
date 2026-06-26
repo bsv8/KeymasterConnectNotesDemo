@@ -228,6 +228,24 @@ code {
   color: var(--color-error);
 }
 
+/*
+ * "删除当前本地数据" 按钮：
+ *   - 复用 secondary-button；不引入新的视觉系统。
+ *   - 危险动作，但样式弱于主操作：仅色调 + 边框 + hover 背景轻微变红，
+ *     不变成实心红色按钮。
+ *   - 与 `.connect-status__forget`（切换身份）区分：切换身份只是换壳，
+ *     删除是清空本地空间，所以删除按钮边框与 hover 红色更明显一点。
+ */
+.connect-status__delete {
+  color: var(--color-error);
+  border-color: rgba(212, 76, 71, 0.4);
+}
+
+.connect-status__delete:hover:not(:disabled) {
+  background: var(--color-error-soft);
+  border-color: rgba(212, 76, 71, 0.6);
+}
+
 .connect-status__error {
   flex-basis: 100%;
   font-size: 12.5px;

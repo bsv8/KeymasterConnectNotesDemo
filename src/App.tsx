@@ -28,6 +28,7 @@ import {
   createFolder,
   deleteFolder,
   deleteNote,
+  deleteOwnerSpace,
   getFolder,
   getNote,
   isFolderEmpty,
@@ -902,22 +903,22 @@ export default function App() {
 
   const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
 
-  /* ============== 切换身份 / 更换登录器 ============== */
+  /* ============== 切换身份 / 删除当前数据 共用的退出清理 ============== */
 
   /**
-   * 退回 LockScreen 时统一收口清空 notes 工作区内存态：
-   * - identity 置空；
-   * - 当前 space 置空；
-   * - pendingDrafts 置空；
-   * - selection / draft / 右键菜单 / 拖拽态 / move 态全清；
-   * - 解密缓存清空；
-   * - pendingDialog / confirmDialog 弹窗态全清——否则旧弹窗会在下一次
-   *   登录后重新出现，污染新 owner 的工作区。
+   * 退出工作区 → 退回 LockScreen 时**统一**收口清空 notes 工作区内存态。
    *
-   * 不删除 localStorage 中已有 owner 分区数据。
+   * 设计缘由（施工单 2026-06-26 delete-current-owner-space 第 7.2 节）：
+   *   - "切换身份"与"删除当前 owner 数据成功"两个动作的最后一段清理完全一致，
+   *     抽成共享函数避免代码分叉；
+   *   - identity 置空 / space 置空 / pendingDrafts 置空 / selection / draft /
+   *     右键菜单 / 拖拽 / move / 解密缓存 / pendingDialog / confirmDialog /
+   *     searchQuery / activeTag / lastError 全清；
+   *   - 同时关掉 popup session，防止旧 popup 持有 in-flight request 后
+   *     异步回流污染新工作区。
+   *   - **不**碰 localStorage——本函数只管内存态；是否删除数据由调用方决定。
    */
-  function handleSwitchIdentity() {
-    // 关掉已有 session，确保 popup 不再持有 in-flight request。
+  function exitWorkspace() {
     sessionRef.current?.closeSession();
     sessionRef.current = null;
     setPopupState("idle");
@@ -937,6 +938,56 @@ export default function App() {
     setLastError(null);
     setSearchQuery("");
     setActiveTag(null);
+  }
+
+  /**
+   * 切换身份 / 更换登录器：只退回登录壳，**不**删本地数据。
+   *
+   * 设计缘由（施工单 2026-06-26 lock-screen-custom-provider）：旧身份数据保留
+   * 在 localStorage，再次登录同一 owner 时仍可见。
+   */
+  function handleSwitchIdentity() {
+    exitWorkspace();
+  }
+
+  /* ============== 删除当前 owner 本地数据 ============== */
+
+  /**
+   * 删除当前 owner 的整个本地 notes 空间，然后退回 LockScreen。
+   *
+   * 设计缘由（施工单 2026-06-26 delete-current-owner-space）：
+   *   - 唯一入口 = 已登录态页头；未登录态不放入口。
+   *   - 删除前必须二次确认；一个确认框吃掉所有风险提示（含未保存 draft）。
+   *   - 删除顺序硬约束（5.4 节）：先调持久层删除 → 只有返回成功才执行内存清理
+   *     与退回 LockScreen；失败时不能假装成功、不能退回登录壳。
+   *   - 删除对象 = `removeStorage(storageKeyForOwner(publicKeyHex))`；
+   *     不递归遍历 note / folder，避免引入部分成功态。
+   *   - 失败时仅展示错误文案，不动工作区，让用户可以重试。
+   */
+  function handleDeleteCurrentOwnerData() {
+    if (!identity || isLoggingIn) return;
+    const ownerHex = identity.publicKeyHex;
+    setConfirmDialog({
+      title: "确认删除当前本地数据？",
+      message:
+        "这会删除当前 publicKey 对应的全部本地 notes 数据，并立即退出当前工作区。\n" +
+        "该操作只影响本浏览器当前站点下的数据，不会删除 Keymaster 身份本身。\n" +
+        "不可恢复。",
+      confirmLabel: "删除并退出",
+      cancelLabel: "取消",
+      onCancel: () => setConfirmDialog(null),
+      onConfirm: () => {
+        // 二次确认框先关掉，避免清空状态后旧弹窗挂在 React 树里。
+        setConfirmDialog(null);
+        // 删除失败时不能假装成功：先调持久层，失败仅展示错误，不清工作区。
+        const ok = deleteOwnerSpace(ownerHex);
+        if (!ok) {
+          setLastError("删除当前本地数据失败，请重试。");
+          return;
+        }
+        exitWorkspace();
+      }
+    });
   }
 
   /* ============== 顶层渲染 ============== */
@@ -975,6 +1026,7 @@ export default function App() {
           isLoggingIn={isLoggingIn}
           onLogin={() => void handleLogin()}
           onForget={handleSwitchIdentity}
+          onDeleteCurrentData={handleDeleteCurrentOwnerData}
         />
       </header>
 
