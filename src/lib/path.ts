@@ -1,258 +1,232 @@
 // src/lib/path.ts
-// note path 真值收口。
+// 显式 folder/note 树构建 + parent/child 关系推导 + 拖拽合法性判断。
 //
-// 设计缘由（施工单 5.1 / 5.2 / 5.3）：
-//   - path 是**绝对路径字符串**，模拟文件树。
-//   - 校验规则是工程键，不是用户自由文本：
-//       - 必须以 `/` 开头；
-//       - 不能等于 `/`；
-//       - 不能以 `/` 结尾；
-//       - 不能含 `//`；
-//       - segment 不能为空、不能是 `.` / `..`；
-//       - 字符集 `^[a-z0-9][a-z0-9._-]*$`；
-//       - path 总长 ≤ 240；单 segment ≤ 64。
-//   - 写入前先 normalize 再 validate。
-//   - `slugifyPathSegment` 把用户自由文本收成合法 segment。
-//
-// 这一层是**唯一**的 path 校验入口：UI 与 store 不许再写第二套规则。
+// 设计缘由（施工单第 4 / 8 / 9 章）：
+//   - folder / note 都是显式实体；树由 `parentId / folderId` 派生，不再走 path 真值。
+//   - 根目录是虚拟节点：用常量 `ROOT_ID` 表达，不落库；其 `parentId` 视为 `null`。
+//   - 同目录下不允许重名（folder ↔ folder，note ↔ note）；本文件负责"是否后代 /
+//     是否合法 drop target"的纯函数判断，冲突由 storage 层阻断。
 
-export const MAX_PATH_LENGTH = 240;
-export const MAX_SEGMENT_LENGTH = 64;
-const SEGMENT_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
+import type { StoredFolderRecord, StoredNoteRecord } from "./notes";
 
-export interface PathValidationFailure {
-  code:
-    | "empty"
-    | "missing_leading_slash"
-    | "root_only"
-    | "trailing_slash"
-    | "empty_segment"
-    | "double_slash"
-    | "dot_segment"
-    | "segment_too_long"
-    | "path_too_long"
-    | "invalid_chars";
-  message: string;
-  segment?: string;
+/** 根目录虚拟节点 id。外部一致引用此常量，避免散落魔数。 */
+export const ROOT_ID: null = null;
+
+/* ============== 树节点 ============== */
+
+export interface TreeFolderNode {
+  kind: "folder";
+  id: string;
+  title: string;
+  parentId: string | null;
+  folders: TreeFolderNode[];
+  notes: TreeNoteNode[];
 }
 
-export type PathValidationResult =
-  | { ok: true; path: string }
-  | { ok: false; failure: PathValidationFailure };
-
-/** 把用户输入的 path 收口到合法形态。不抛异常；不通过返回 failure。 */
-export function normalizeNotePath(raw: string): string {
-  if (typeof raw !== "string") return "";
-  let value = raw.trim();
-  // 合并多余斜杠：把 `//` → `/`。
-  value = value.replace(/\/+/g, "/");
-  // 去掉末尾斜杠（但保留单独的 `/` 给后续规则拒绝）。
-  while (value.length > 1 && value.endsWith("/")) {
-    value = value.slice(0, -1);
-  }
-  // 把大小写统一到小写；path 是工程键。
-  value = value.toLowerCase();
-  return value;
+export interface TreeNoteNode {
+  kind: "note";
+  id: string;
+  title: string;
+  folderId: string | null;
 }
 
-/** 校验 path 是否合法；返回 `{ ok, path }` 或 `{ ok: false, failure }`。 */
-export function validateNotePath(raw: string): PathValidationResult {
-  const normalized = normalizeNotePath(raw);
-  if (normalized.length === 0) {
-    return {
-      ok: false,
-      failure: { code: "empty", message: "Path is empty." }
-    };
-  }
-  if (!normalized.startsWith("/")) {
-    return {
-      ok: false,
-      failure: {
-        code: "missing_leading_slash",
-        message: "Path must start with '/'."
-      }
-    };
-  }
-  if (normalized === "/") {
-    return {
-      ok: false,
-      failure: { code: "root_only", message: "Path cannot be just '/'." }
-    };
-  }
-  if (normalized.endsWith("/")) {
-    return {
-      ok: false,
-      failure: {
-        code: "trailing_slash",
-        message: "Path must not end with '/'."
-      }
-    };
-  }
-  if (normalized.includes("//")) {
-    return {
-      ok: false,
-      failure: {
-        code: "double_slash",
-        message: "Path must not contain '//'."
-      }
-    };
-  }
-  if (normalized.length > MAX_PATH_LENGTH) {
-    return {
-      ok: false,
-      failure: {
-        code: "path_too_long",
-        message: `Path must be ≤ ${MAX_PATH_LENGTH} characters.`
-      }
-    };
-  }
-  const segments = normalized.slice(1).split("/");
-  for (const segment of segments) {
-    if (segment.length === 0) {
-      return {
-        ok: false,
-        failure: {
-          code: "empty_segment",
-          message: "Path segment cannot be empty."
-        }
-      };
-    }
-    if (segment === "." || segment === "..") {
-      return {
-        ok: false,
-        failure: {
-          code: "dot_segment",
-          message: `Path segment '${segment}' is not allowed.`,
-          segment
-        }
-      };
-    }
-    if (segment.length > MAX_SEGMENT_LENGTH) {
-      return {
-        ok: false,
-        failure: {
-          code: "segment_too_long",
-          message: `Segment must be ≤ ${MAX_SEGMENT_LENGTH} characters.`,
-          segment
-        }
-      };
-    }
-    if (!SEGMENT_REGEX.test(segment)) {
-      return {
-        ok: false,
-        failure: {
-          code: "invalid_chars",
-          message: `Segment '${segment}' must match ^[a-z0-9][a-z0-9._-]*$.`,
-          segment
-        }
-      };
-    }
-  }
-  return { ok: true, path: normalized };
+export interface TreeRootNode {
+  kind: "root";
+  id: null;
+  folders: TreeFolderNode[];
+  notes: TreeNoteNode[];
 }
+
+export type TreeNode = TreeFolderNode | TreeNoteNode | TreeRootNode;
+
+/* ============== 树构建 ============== */
 
 /**
- * 把人类可读的标题收口成合法 segment。
- * - 转小写；
- * - 把空白与标点替换为 `-`；
- * - 去掉首尾 `-` / `.` / `_`；
- * - 若首字符不是 `[a-z0-9]`，加 `n-` 前缀；
- * - 截断到 `MAX_SEGMENT_LENGTH`；
- * - 兜底空字符串为 `untitled`。
+ * 由 folder / note 实体构建完整的 tree。
+ * - 同父目录下 folder / note 都按 title 字典序排序；
+ * - 不存在的父 id 视为根目录下的孤儿（兜底），保证不丢节点。
  */
-export function slugifyPathSegment(input: string): string {
-  let value = (input ?? "").toString().toLowerCase().normalize("NFKD");
-  // 把任何非 `[a-z0-9._-]` 字符替换为 `-`。
-  value = value.replace(/[^a-z0-9._-]+/g, "-");
-  // 压缩连续 `-`。
-  value = value.replace(/-+/g, "-");
-  // 去掉首尾 `-` / `.` / `_`。
-  value = value.replace(/^[-._]+|[-._]+$/g, "");
-  // 截断。
-  if (value.length > MAX_SEGMENT_LENGTH) {
-    value = value.slice(0, MAX_SEGMENT_LENGTH);
+export function buildTree(
+  folders: Record<string, StoredFolderRecord>,
+  notes: Record<string, StoredNoteRecord>
+): TreeRootNode {
+  const folderById = new Map<string, TreeFolderNode>();
+  for (const f of Object.values(folders)) {
+    folderById.set(f.id, {
+      kind: "folder",
+      id: f.id,
+      title: f.title,
+      parentId: f.parentId,
+      folders: [],
+      notes: []
+    });
   }
-  // 保证首字符合法。
-  if (value.length === 0) {
-    return "untitled";
-  }
-  if (!/^[a-z0-9]/.test(value)) {
-    value = `n-${value}`;
-  }
-  if (value.length > MAX_SEGMENT_LENGTH) {
-    value = value.slice(0, MAX_SEGMENT_LENGTH);
-  }
-  // 末段再扫一次首字符。
-  if (!/^[a-z0-9]/.test(value)) {
-    value = `n-${value}`.slice(0, MAX_SEGMENT_LENGTH);
-  }
-  return value;
-}
-
-/**
- * 用 parent path + segment 拼出完整 path；若 parent 是 `/`，只返回 `/segment`。
- * 仍需走 `validateNotePath` 才能确认整体合法。
- */
-export function joinNotePath(parent: string, segment: string): string {
-  const base = parent === "/" ? "" : parent.replace(/\/+$/, "");
-  return `${base}/${segment}`;
-}
-
-/** 把 path 切成 segments（不含前导 `/`）。 */
-export function splitNotePath(path: string): string[] {
-  return path.replace(/^\/+/, "").split("/").filter((s) => s.length > 0);
-}
-
-/**
- * 把所有 path 折成一棵以 `/` 为根的树。
- *
- * 设计缘由（施工单 5.x）：
- *   - 树**完全由 key path 派生**，不维护额外 folder 真值。
- *   - `children` 直接持有子节点引用，便于 UI 直接递归。
- *   - `path` 唯一标识；同 path 命中两次时折叠。
- */
-export interface NoteTreeNode {
-  name: string;
-  path: string;
-  children: NoteTreeNode[];
-}
-
-export function buildNoteTree(allPaths: string[]): NoteTreeNode {
-  const root: NoteTreeNode = { name: "", path: "/", children: [] };
-  const nodeByPath = new Map<string, NoteTreeNode>([["/", root]]);
-  for (const path of allPaths) {
-    if (path === "/") continue;
-    if (nodeByPath.has(path)) continue;
-    const segments = splitNotePath(path);
-    let acc = "";
-    let parent = root;
-    for (let i = 0; i < segments.length; i += 1) {
-      const seg = segments[i]!;
-      acc = acc ? `${acc}/${seg}` : `/${seg}`;
-      let node = nodeByPath.get(acc);
-      if (!node) {
-        node = { name: seg, path: acc, children: [] };
-        nodeByPath.set(acc, node);
-        parent.children.push(node);
-      }
-      parent = node;
+  const root: TreeRootNode = { kind: "root", id: null, folders: [], notes: [] };
+  const attach = (node: TreeFolderNode) => {
+    const parent = node.parentId === null ? null : folderById.get(node.parentId);
+    if (parent) {
+      parent.folders.push(node);
+    } else {
+      root.folders.push(node);
     }
-  }
-  const sortRec = (node: NoteTreeNode) => {
-    node.children.sort((a, b) => a.name.localeCompare(b.name));
-    for (const child of node.children) sortRec(child);
   };
-  sortRec(root);
+  for (const node of folderById.values()) attach(node);
+
+  // 同 parentId 下，folder / note 各按 title 排序后挂载。
+  const notesByParent = new Map<string | null, TreeNoteNode[]>();
+  for (const n of Object.values(notes)) {
+    const node: TreeNoteNode = {
+      kind: "note",
+      id: n.id,
+      title: n.title,
+      folderId: n.folderId
+    };
+    const list = notesByParent.get(n.folderId) ?? [];
+    list.push(node);
+    notesByParent.set(n.folderId, list);
+  }
+  const consumeNotes = (parentId: string | null, target: TreeFolderNode | TreeRootNode) => {
+    const list = notesByParent.get(parentId);
+    if (!list) return;
+    list.sort((a, b) => a.title.localeCompare(b.title));
+    target.notes.push(...list);
+    notesByParent.delete(parentId);
+  };
+  const sortFolders = (n: TreeFolderNode) => {
+    n.folders.sort((a, b) => a.title.localeCompare(b.title));
+    for (const c of n.folders) sortFolders(c);
+  };
+  const sortRootFolders = () => {
+    root.folders.sort((a, b) => a.title.localeCompare(b.title));
+    for (const c of root.folders) sortFolders(c);
+  };
+  // 顺序：先 root，再递归 children。
+  consumeNotes(null, root);
+  for (const f of root.folders) {
+    consumeNotes(f.id, f);
+  }
+  sortRootFolders();
+  for (const f of root.folders) {
+    consumeNotes(f.id, f);
+    sortFolders(f);
+  }
+  // 兜底：残留 notes 视为根下。
+  if (notesByParent.size > 0) {
+    const leftover: TreeNoteNode[] = [];
+    for (const list of notesByParent.values()) leftover.push(...list);
+    leftover.sort((a, b) => a.title.localeCompare(b.title));
+    root.notes.push(...leftover);
+  }
   return root;
 }
 
-/** 递归判断子树里是否存在"path 命中 `visible`"的叶子。 */
-export function treeContainsVisibleLeaf(node: NoteTreeNode, visible: Set<string>): boolean {
-  if (node.children.length === 0) {
-    return visible.has(node.path);
-  }
-  for (const child of node.children) {
-    if (treeContainsVisibleLeaf(child, visible)) return true;
+/* ============== 后代判断 ============== */
+
+/**
+ * 判定 `descendantId` 是否为 `ancestorId` 的后代（含自己）。folderId 为 null 表示根。
+ * 用途：拖拽 folder 到自己 / 自己后代时阻断。
+ */
+export function isFolderDescendant(
+  folders: Record<string, StoredFolderRecord>,
+  ancestorId: string | null,
+  descendantId: string
+): boolean {
+  if (ancestorId === null) return false;
+  if (ancestorId === descendantId) return true;
+  let current: string | null = folders[descendantId]?.parentId ?? null;
+  while (current !== null) {
+    if (current === ancestorId) return true;
+    const next: string | null = folders[current]?.parentId ?? null;
+    if (next === current) break;
+    current = next;
   }
   return false;
+}
+
+/* ============== 拖拽合法性 ============== */
+
+export type DragSourceKind = "folder" | "note";
+
+export interface DragLegalityCheck {
+  /** 是否允许落在这个目标上。 */
+  ok: boolean;
+  /** 阻断时的具体原因。 */
+  reason?:
+    | "drop_to_note"
+    | "drop_to_self"
+    | "drop_to_descendant"
+    | "drop_to_missing_source";
+}
+
+/**
+ * 判定从 `source` 拖到 `target` 是否合法（仅 structural，不做重名检查）。
+ * - note 拖到 folder / root：合法；
+ * - note 拖到 note：不合法（必须落到 folder 或 root）；
+ * - folder 拖到 folder / root：合法，但**不能**是自己 / 自己后代；
+ * - root 是合法落点：表示"移动到根目录下"。
+ */
+export function checkDragLegality(
+  folders: Record<string, StoredFolderRecord>,
+  source: { kind: DragSourceKind; id: string },
+  target: { kind: "folder" | "note" | "root"; id: string | null }
+): DragLegalityCheck {
+  if (source.kind === "note") {
+    if (target.kind === "note") return { ok: false, reason: "drop_to_note" };
+    return { ok: true };
+  }
+  // folder
+  if (!folders[source.id]) return { ok: false, reason: "drop_to_missing_source" };
+  if (target.kind === "note") return { ok: false, reason: "drop_to_note" };
+  if (target.kind === "folder") {
+    if (target.id === null) return { ok: false, reason: "drop_to_missing_source" };
+    if (target.id === source.id) return { ok: false, reason: "drop_to_self" };
+    if (isFolderDescendant(folders, source.id, target.id)) {
+      return { ok: false, reason: "drop_to_descendant" };
+    }
+  }
+  return { ok: true };
+}
+
+/** 把 `checkDragLegality` 的 reason 转中文文案。 */
+export function describeDragLegalityReason(reason: NonNullable<DragLegalityCheck["reason"]>): string {
+  switch (reason) {
+    case "drop_to_note":
+      return "不能把内容拖到 note 上。";
+    case "drop_to_self":
+      return "不能把文件夹拖到自己内部。";
+    case "drop_to_descendant":
+      return "不能把文件夹拖到自己的后代下面。";
+    case "drop_to_missing_source":
+      return "找不到要拖动的源。";
+  }
+}
+
+/* ============== 节点查找 / 列表 ============== */
+
+/** 取得 folder record 在树上的"显示路径"（不含自己）。 */
+export function folderAncestorChain(
+  folders: Record<string, StoredFolderRecord>,
+  folderId: string
+): StoredFolderRecord[] {
+  const out: StoredFolderRecord[] = [];
+  let cur: string | null = folderId;
+  while (cur !== null) {
+    const node: StoredFolderRecord | undefined = folders[cur];
+    if (!node) break;
+    out.unshift(node);
+    cur = node.parentId;
+  }
+  return out;
+}
+
+/** 是否根目录（含未选中场景）。 */
+export function isRootId(id: string | null): id is null {
+  return id === null;
+}
+
+/** 把任意 id 归一为"非 null folder id"，空字符串视为 null。 */
+export function normalizeFolderId(id: string | null | undefined): string | null {
+  if (typeof id !== "string") return null;
+  if (id.length === 0) return null;
+  return id;
 }

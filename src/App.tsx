@@ -1,13 +1,15 @@
 // src/App.tsx
 // Notes Demo 页面级状态与编排。
 //
-// 设计缘由（施工单第 4-8 章）：
-//   - **状态真值集中在 App**。组件只接 props / onChange，不维护 page-level 业务态。
-//   - 登录 → 解锁一个 `currentOwner`，所有 notes 都从 `currentOwner` 命名空间加载。
-//   - 当前 note 选中 → 解密 → 编辑器；编辑器 change → draft.markdown。
-//   - 保存：draft → `cipher.encrypt` → 写入当前 owner 的 store。
-//   - 切换 note / 离开编辑器前检查 dirty：未保存必须用户确认才能继续。
-//   - 异常：所有 popup / 协议错误都通过 `lastError` 上抛给 UI；**不**静默回退。
+// 设计缘由（施工单第 4-10 章）：
+//   - 状态真值集中在 App；组件只接 props / onChange。
+//   - 选中模型改成"文件夹或笔记二选一"：`selectedFolderId` 或 `selectedNoteId`。
+//     它们由 `selection: { kind: "folder" | "note"; id: string | null }` 统一表达。
+//   - root 是虚拟节点：用 `null` 表达"根目录 / 当前没选中具体实体"。
+//   - 所有 folder/note 操作（创建 / 重命名 / 移动 / 删除）收口在 App 这一层；
+//     sidebar / inspector 只发出动作意图。
+//   - 解密失败：note 仍保留；metadata 锁死；删除仍然允许。
+//   - 右键菜单 / 拖拽状态集中在这里管理；sidebar 只负责"显示 + 触发"。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -21,18 +23,27 @@ import {
   parseCipherEncryptResult,
   parseIdentityResult
 } from "./lib/keymaster";
-import { joinNotePath, normalizeNotePath, validateNotePath } from "./lib/path";
+import { NOTE_CONTENT_TYPE, emptyDraft, normalizeTags, validateTitle, type NoteDraft, type StoredFolderRecord, type StoredNoteRecord } from "./lib/notes";
 import {
-  findPathsByTag,
-  isPathConflict,
-  listAllTags,
-  listNotePaths,
-  loadOwnerNotes,
-  saveOwnerNotes
+  createFolder,
+  deleteFolder,
+  deleteNote,
+  getFolder,
+  getNote,
+  isFolderEmpty,
+  isFolderTitleConflict,
+  isNoteTitleConflict,
+  loadOwnerSpace,
+  moveFolder,
+  moveNote,
+  putNote,
+  renameFolder,
+  saveOwnerSpace,
+  type StoredNotesSpace
 } from "./lib/storage";
-import { emptyDraft, suggestNextPath, type NoteDraft, type StoredNoteRecord } from "./lib/notes";
+import { checkDragLegality, describeDragLegalityReason } from "./lib/path";
 import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
-import { NotesSidebar } from "./components/NotesSidebar";
+import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
 import { NoteInspector } from "./components/NoteInspector";
 
@@ -41,7 +52,6 @@ const READY_TIMEOUT_MS = 10_000;
 const RESULT_TIMEOUT_MS = 60_000;
 const POPUP_WIDTH = 520;
 const POPUP_HEIGHT = 760;
-const NOTE_CONTENT_TYPE = "keymaster.notes.markdown.v1";
 
 interface IdentitySnapshot {
   publicKeyHex: string;
@@ -50,8 +60,30 @@ interface IdentitySnapshot {
 }
 
 interface DecryptedCache {
-  path: string;
+  noteId: string;
   markdown: string;
+}
+
+interface Selection {
+  kind: "folder" | "note" | "root";
+  /** folder 时是 folderId；note 时是 noteId；"root" 时为 null。 */
+  id: string | null;
+}
+
+interface PendingDialog {
+  title: string;
+  message: string;
+  /** 阻断动作；confirm 后回到正常态。 */
+  onDismiss: () => void;
+}
+
+interface ConfirmDialog {
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  confirmLabel: string;
+  cancelLabel: string;
 }
 
 export default function App() {
@@ -65,14 +97,31 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
-  const [notes, setNotes] = useState<Record<string, StoredNoteRecord>>({});
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [space, setSpace] = useState<StoredNotesSpace>({ v: 1, folders: {}, notes: {} });
+  /**
+   * 未保存的 note draft；只活在内存，**不**进 localStorage。
+   * 边界：note 的真值（带 cipher）只能由 `handleSave` 落库。
+   * 这是硬切换的高严重性修复：新建时不再把空密文记录写到持久层。
+   */
+  const [pendingDrafts, setPendingDrafts] = useState<Record<string, StoredNoteRecord>>({});
+  const [selection, setSelection] = useState<Selection>({ kind: "root", id: null });
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const [decryptError, setDecryptError] = useState<string | null>(null);
-  const [pendingSwitchPath, setPendingSwitchPath] = useState<string | null>(null);
-
+  const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
+
+  const [contextMenu, setContextMenu] = useState<SidebarContextMenuState | null>(null);
+  const [dragging, setDragging] = useState<
+    | { kind: "folder" | "note"; id: string }
+    | null
+  >(null);
+  const [dropHover, setDropHover] = useState<
+    | { kind: "folder" | "root"; id: string | null }
+    | null
+  >(null);
+  const [moveState, setMoveState] = useState<MoveState | null>(null);
 
   const decryptedCacheRef = useRef<DecryptedCache | null>(null);
   const sessionRef = useRef<PopupSessionClient | null>(null);
@@ -118,24 +167,40 @@ export default function App() {
     };
   }, []);
 
-  /* ============== 加载当前 owner 的 notes ============== */
+  // 全局点击 / 滚动时关闭右键菜单。
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    window.addEventListener("click", dismiss);
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    return () => {
+      window.removeEventListener("click", dismiss);
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
+    };
+  }, [contextMenu]);
+
+  /* ============== 加载当前 owner 的空间 ============== */
 
   useEffect(() => {
     if (!identity) {
-      setNotes({});
-      setSelectedPath(null);
+      setSpace({ v: 1, folders: {}, notes: {} });
+      setPendingDrafts({});
+      setSelection({ kind: "root", id: null });
       setDraft(null);
       decryptedCacheRef.current = null;
       return;
     }
-    const loaded = loadOwnerNotes(identity.publicKeyHex);
-    setNotes(loaded);
-    setSelectedPath(null);
+    const loaded = loadOwnerSpace(identity.publicKeyHex);
+    setSpace(loaded);
+    setPendingDrafts({});
+    setSelection({ kind: "root", id: null });
     setDraft(null);
     decryptedCacheRef.current = null;
   }, [identity?.publicKeyHex]);
 
-  /* ============== 日志（仅 console；后续可挂 UI） ============== */
+  /* ============== 日志 ============== */
 
   function pushLog(event: ProtocolLogEvent) {
     const prefix = `[notes-demo][${event.method ?? "system"}][${event.stage}]`;
@@ -185,68 +250,87 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normalizedTargetOrigin, currentOrigin]);
 
-  /* ============== 切换 note ============== */
+  /* ============== 选中辅助 ============== */
 
-  const trySwitchPath = useCallback(
-    (nextPath: string | null) => {
-      if (draft && draftHasChanges(notes, selectedPath, draft, decryptedCacheRef.current) && nextPath !== selectedPath) {
-        setPendingSwitchPath(nextPath);
-        return;
-      }
-      setSelectedPath(nextPath);
+  function trySelect(next: Selection) {
+    // 切换 note 时若 draft 有未保存修改，弹确认。
+    if (
+      draft &&
+      selection.kind === "note" &&
+      selection.id !== null &&
+      (next.kind !== "note" || next.id !== selection.id) &&
+      draftHasChanges(space, pendingDrafts, selection.id, draft, decryptedCacheRef.current)
+    ) {
+      setConfirmDialog({
+        title: "放弃未保存的修改？",
+        message: "当前 note 存在未保存修改。继续切换将丢失这些修改。",
+        confirmLabel: "放弃并切换",
+        cancelLabel: "继续编辑",
+        onConfirm: () => {
+          setConfirmDialog(null);
+          applySelection(next);
+        },
+        onCancel: () => setConfirmDialog(null)
+      });
+      return;
+    }
+    applySelection(next);
+  }
+
+  function applySelection(next: Selection) {
+    setSelection(next);
+    if (next.kind !== "note" || next.id === null) {
       setDraft(null);
       setDecryptError(null);
       decryptedCacheRef.current = null;
-    },
-    [draft, notes, selectedPath]
-  );
-
-  function confirmSwitchPath() {
-    if (pendingSwitchPath === null) return;
-    const next = pendingSwitchPath;
-    setPendingSwitchPath(null);
-    setSelectedPath(next);
-    setDraft(null);
-    setDecryptError(null);
-    decryptedCacheRef.current = null;
-  }
-
-  function cancelSwitchPath() {
-    setPendingSwitchPath(null);
+    }
   }
 
   /* ============== 选中后：解密 note 加载到 draft ============== */
 
   useEffect(() => {
-    if (!selectedPath) {
+    if (selection.kind !== "note" || selection.id === null) {
       setDraft(null);
       return;
     }
-    const record = notes[selectedPath];
-    if (!record) {
+    const noteId = selection.id;
+    const persisted = space.notes[noteId];
+    const pending = pendingDrafts[noteId];
+    if (!persisted && !pending) {
       setDraft(null);
       return;
     }
-    // 已在 cache 里：直接复用。
-    if (decryptedCacheRef.current && decryptedCacheRef.current.path === selectedPath) {
+    if (pending) {
+      // 未保存 draft：直接显示，不解密。
       setDraft({
-        path: record.key,
-        title: record.title,
-        tags: [...record.tags],
+        noteId: pending.id,
+        title: pending.title,
+        tags: [...pending.tags],
+        markdown: decryptedCacheRef.current?.markdown ?? "",
+        decryptFailed: false
+      });
+      setDecryptError(null);
+      return;
+    }
+    if (decryptedCacheRef.current && decryptedCacheRef.current.noteId === persisted!.id) {
+      setDraft({
+        noteId: persisted!.id,
+        title: persisted!.title,
+        tags: [...persisted!.tags],
         markdown: decryptedCacheRef.current.markdown,
         decryptFailed: false
       });
       setDecryptError(null);
       return;
     }
-    void openNote(record);
+    void openNote(persisted!);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPath, notes]);
+  }, [selection.kind, selection.id, space.notes, pendingDrafts]);
 
   async function openNote(record: StoredNoteRecord) {
     setDecryptError(null);
     setDraft({
-      path: record.key,
+      noteId: record.id,
       title: record.title,
       tags: [...record.tags],
       markdown: "（解密中...）",
@@ -265,9 +349,9 @@ export default function App() {
         throw new Error(formatProtocolError(response.error.code, response.error.message));
       }
       const decrypted = parseCipherDecryptResult(response.result as never);
-      decryptedCacheRef.current = { path: record.key, markdown: decrypted };
+      decryptedCacheRef.current = { noteId: record.id, markdown: decrypted };
       setDraft({
-        path: record.key,
+        noteId: record.id,
         title: record.title,
         tags: [...record.tags],
         markdown: decrypted,
@@ -277,7 +361,7 @@ export default function App() {
     } catch (err) {
       setDecryptError(formatTransportError(err));
       setDraft({
-        path: record.key,
+        noteId: record.id,
         title: record.title,
         tags: [...record.tags],
         markdown: "",
@@ -287,38 +371,243 @@ export default function App() {
     }
   }
 
-  /* ============== 新建 / 保存 / 删除 ============== */
+  /* ============== folder / note 操作 ============== */
 
-  function handleCreate() {
+  function resolveCreateParent(): string | null {
+    if (selection.kind === "folder" && selection.id !== null) return selection.id;
+    if (selection.kind === "note" && selection.id !== null) {
+      const note = space.notes[selection.id] ?? pendingDrafts[selection.id];
+      return note?.folderId ?? null;
+    }
+    // root：根目录。
+    return null;
+  }
+
+  /**
+   * 显式给出 parentId 的入口——右键菜单走这条，避免 `setSelection` 异步生效
+   * 导致新建位置回退到"之前选中的位置"。
+   * 未传 override 时，回退到 `resolveCreateParent()`（用于顶部 + note / + 文件夹 按钮）。
+   */
+  function handleCreateNote(parentIdOverride?: string | null) {
     if (!identity) return;
-    const path = suggestNextPath(notes, "新 note");
-    // 新建时自动跳到选中态。
-    setSelectedPath(null);
-    setDraft({
-      path,
+    const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
+    const now = Date.now();
+    const id = cryptoRandomId();
+    // 同目录重名检查：space.notes + pendingDrafts 都要纳入。
+    if (isNoteTitleConflictMerged(space.notes, pendingDrafts, parentId, "新 note", null)) {
+      setLastError("新建 note 失败：同目录下已有同名 note。");
+      return;
+    }
+    const draftNote: StoredNoteRecord = {
+      v: 2,
+      id,
+      folderId: parentId,
       title: "新 note",
       tags: [],
+      createdAt: now,
+      updatedAt: now,
+      cipher: { contentType: NOTE_CONTENT_TYPE, nonceBase64: "", cipherbytesBase64: "" }
+    };
+    // 关键：**只**写入 in-memory pendingDrafts，不进 space / localStorage。
+    setPendingDrafts((prev) => ({ ...prev, [id]: draftNote }));
+    setLastError(null);
+    setSelection({ kind: "note", id });
+    setDraft({
+      noteId: id,
+      title: draftNote.title,
+      tags: [...draftNote.tags],
       markdown: "",
       decryptFailed: false
     });
-    // 用空 record 表示"新建"；保存时建出真实 record。
+    decryptedCacheRef.current = null;
   }
+
+  function handleCreateFolder(parentIdOverride?: string | null) {
+    if (!identity) return;
+    const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
+    const result = createFolder(space, { parentId, title: "新文件夹" });
+    if (!result) {
+      setLastError("新建文件夹失败：同目录下已有同名文件夹。");
+      return;
+    }
+    commitSpace(result.next);
+    setLastError(null);
+    setSelection({ kind: "folder", id: result.folder.id });
+    setDraft(null);
+  }
+
+  function handleRenameFolder(folderId: string, title: string) {
+    const trimmed = title.trim();
+    if (trimmed.length === 0) {
+      setLastError("文件夹名不能为空。");
+      return;
+    }
+    const result = renameFolder(space, folderId, trimmed);
+    if (!result) {
+      setLastError("重命名失败：同目录下已有同名文件夹。");
+      return;
+    }
+    commitSpace(result.next);
+    setLastError(null);
+  }
+
+  function handleRenameNote(noteId: string, title: string) {
+    const trimmed = title.trim();
+    if (trimmed.length === 0) {
+      setLastError("文件名（标题）不能为空。");
+      return;
+    }
+    // pending draft
+    if (pendingDrafts[noteId]) {
+      const target = pendingDrafts[noteId];
+      if (isNoteTitleConflictMerged(space.notes, pendingDrafts, target.folderId, trimmed, noteId)) {
+        setLastError("重命名失败：同目录下已有同名 note。");
+        return;
+      }
+      setPendingDrafts((prev) => ({
+        ...prev,
+        [noteId]: { ...target, title: trimmed, updatedAt: Date.now() }
+      }));
+      if (draft && draft.noteId === noteId) {
+        setDraft({ ...draft, title: trimmed });
+      }
+      setLastError(null);
+      return;
+    }
+    const target = space.notes[noteId];
+    if (!target) return;
+    if (isNoteTitleConflict(space.notes, target.folderId, trimmed, noteId)) {
+      setLastError("重命名失败：同目录下已有同名 note。");
+      return;
+    }
+    const updated: StoredNoteRecord = { ...target, title: trimmed, updatedAt: Date.now() };
+    commitSpace(putNote(space, updated));
+    if (draft && draft.noteId === noteId) {
+      setDraft({ ...draft, title: trimmed });
+    }
+    setLastError(null);
+  }
+
+  function handleDeleteFolder(folderId: string) {
+    if (!isFolderEmpty(space, folderId)) {
+      setPendingDialog({
+        title: "文件夹非空，无法删除",
+        message: "首版不支持递归删除。请先清空里面的文件夹和 note 后再删除。",
+        onDismiss: () => setPendingDialog(null)
+      });
+      return;
+    }
+    commitSpace(deleteFolder(space, folderId));
+    if (selection.kind === "folder" && selection.id === folderId) {
+      setSelection({ kind: "root", id: null });
+      setDraft(null);
+    }
+    setLastError(null);
+  }
+
+  function handleDeleteNote(noteId: string) {
+    // pending draft：直接从内存里丢；不持久化、不弹任何"非空"等对话框。
+    if (pendingDrafts[noteId]) {
+      setPendingDrafts((prev) => {
+        const next = { ...prev };
+        delete next[noteId];
+        return next;
+      });
+      if (selection.kind === "note" && selection.id === noteId) {
+        setSelection({ kind: "root", id: null });
+        setDraft(null);
+        decryptedCacheRef.current = null;
+      }
+      setLastError(null);
+      return;
+    }
+    if (!space.notes[noteId]) return;
+    commitSpace(deleteNote(space, noteId));
+    if (selection.kind === "note" && selection.id === noteId) {
+      setSelection({ kind: "root", id: null });
+      setDraft(null);
+      decryptedCacheRef.current = null;
+    }
+    setLastError(null);
+  }
+
+  function handleMoveFolder(folderId: string, newParentId: string | null) {
+    const next = moveFolder(space, folderId, newParentId);
+    if (!next) {
+      setPendingDialog({
+        title: "无法移动文件夹",
+        message: "目标位置不合法，或目标目录下已有同名文件夹。",
+        onDismiss: () => setPendingDialog(null)
+      });
+      return;
+    }
+    commitSpace(next);
+    setLastError(null);
+  }
+
+  function handleMoveNote(noteId: string, newFolderId: string | null) {
+    // pending draft：folderId 直接在内存里改；不动 space，不写盘。
+    if (pendingDrafts[noteId]) {
+      const target = pendingDrafts[noteId];
+      if (isNoteTitleConflictMerged(space.notes, pendingDrafts, newFolderId, target.title, noteId)) {
+        setPendingDialog({
+          title: "无法移动 note",
+          message: "目标目录下已有同名 note，请改文件名或换目标文件夹。",
+          onDismiss: () => setPendingDialog(null)
+        });
+        return;
+      }
+      setPendingDrafts((prev) => ({
+        ...prev,
+        [noteId]: { ...target, folderId: newFolderId, updatedAt: Date.now() }
+      }));
+      setLastError(null);
+      return;
+    }
+    const next = moveNote(space, noteId, newFolderId);
+    if (!next) {
+      setPendingDialog({
+        title: "无法移动 note",
+        message: "目标目录下已有同名 note，请改文件名或换目标文件夹。",
+        onDismiss: () => setPendingDialog(null)
+      });
+      return;
+    }
+    commitSpace(next);
+    setLastError(null);
+  }
+
+  function commitSpace(next: StoredNotesSpace) {
+    setSpace(next);
+    if (identity) saveOwnerSpace(identity.publicKeyHex, next);
+  }
+
+  /* ============== 保存 ============== */
 
   async function handleSave() {
     if (!identity || !draft) return;
-    // 设计缘由：decrypt_failed 的 note 没有明文，**禁止**保存——
-    // 否则会用空正文或陈旧 draft 覆盖原密文，破坏"密文是真值"边界。
+    // 解密失败：禁止保存（不覆盖密文）。
     if (draft.decryptFailed) {
       setLastError("当前 note 解密失败，无法重新加密保存。请删除或切换 origin / active key 后重试。");
       return;
     }
-    const pathCheck = validateNotePath(normalizeNotePath(draft.path));
-    if (!pathCheck.ok) {
-      setLastError(`Path 非法：${pathCheck.failure.message}`);
+    const titleCheck = validateTitle(draft.title);
+    if (!titleCheck.ok) {
+      setLastError(`保存失败：${titleCheck.failure.message}`);
       return;
     }
-    if (isPathConflict(notes, pathCheck.path, selectedPath ?? undefined)) {
-      setLastError(`Path 冲突：${pathCheck.path} 已被占用。`);
+    const noteId = draft.noteId;
+    const isPending = noteId !== null && pendingDrafts[noteId] !== undefined;
+    const existingPersisted: StoredNoteRecord | null =
+      noteId !== null ? space.notes[noteId] ?? null : null;
+    const existingPending: StoredNoteRecord | null =
+      noteId !== null ? pendingDrafts[noteId] ?? null : null;
+    const existing = existingPersisted ?? existingPending;
+    const isNew = existing === null;
+    // 同目录冲突：drafts 与 persisted 都要纳入；排除自己。
+    const folderIdForCheck = isNew ? resolveCreateParent() : existing!.folderId;
+    if (isNoteTitleConflictMerged(space.notes, pendingDrafts, folderIdForCheck, titleCheck.title, noteId)) {
+      setLastError(`保存失败：当前目录下已有同名 note "${titleCheck.title}"。`);
       return;
     }
     setLastError(null);
@@ -337,64 +626,58 @@ export default function App() {
       }
       const cipher = parseCipherEncryptResult(response.result as never);
       const now = Date.now();
-      const existing = notes[pathCheck.path];
-      const next: StoredNoteRecord = {
-        v: 1,
-        key: pathCheck.path,
-        title: draft.title,
-        tags: [...draft.tags],
+      const record: StoredNoteRecord = {
+        v: 2,
+        id: existing?.id ?? cryptoRandomId(),
+        folderId: folderIdForCheck,
+        title: titleCheck.title,
+        tags: normalizeTags(draft.tags),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
-        ownerPublicKeyHex: identity.publicKeyHex,
         cipher: {
           contentType: NOTE_CONTENT_TYPE,
           nonceBase64: cipher.nonceBase64,
           cipherbytesBase64: cipher.cipherbytesBase64
         }
       };
-      // path 改变（移动）：删除旧 path。
-      let updatedNotes = notes;
-      if (selectedPath && selectedPath !== pathCheck.path && notes[selectedPath]) {
-        const copy = { ...notes };
-        delete copy[selectedPath];
-        updatedNotes = { ...copy, [pathCheck.path]: next };
-      } else {
-        updatedNotes = { ...notes, [pathCheck.path]: next };
+      const next = putNote(space, record);
+      // 真值已带密文：落库；同时把这条 note 从 in-memory pendingDrafts 移除。
+      setSpace(next);
+      if (identity) saveOwnerSpace(identity.publicKeyHex, next);
+      if (isPending && noteId !== null) {
+        setPendingDrafts((prev) => {
+          const c = { ...prev };
+          delete c[noteId];
+          return c;
+        });
       }
-      setNotes(updatedNotes);
-      saveOwnerNotes(identity.publicKeyHex, updatedNotes);
-      decryptedCacheRef.current = { path: pathCheck.path, markdown: draft.markdown };
-      setSelectedPath(pathCheck.path);
-      setLastError(null);
+      decryptedCacheRef.current = { noteId: record.id, markdown: draft.markdown };
+      setSelection({ kind: "note", id: record.id });
+      setDraft({
+        noteId: record.id,
+        title: record.title,
+        tags: [...record.tags],
+        markdown: draft.markdown,
+        decryptFailed: false
+      });
     } catch (err) {
       setLastError(formatTransportError(err));
     }
   }
 
-  function handleDelete() {
-    if (!identity || !selectedPath) return;
-    if (!notes[selectedPath]) return;
-    const copy = { ...notes };
-    delete copy[selectedPath];
-    setNotes(copy);
-    saveOwnerNotes(identity.publicKeyHex, copy);
-    setSelectedPath(null);
-    setDraft(null);
-    decryptedCacheRef.current = null;
-  }
-
   function handleReset() {
-    if (!selectedPath) {
-      setDraft(null);
+    if (!draft) return;
+    if (draft.noteId === null) {
+      setDraft(emptyDraft());
       return;
     }
-    const record = notes[selectedPath];
+    const record = space.notes[draft.noteId] ?? pendingDrafts[draft.noteId];
     if (!record) {
-      setDraft(null);
+      setDraft(emptyDraft());
       return;
     }
     setDraft({
-      path: record.key,
+      noteId: record.id,
       title: record.title,
       tags: [...record.tags],
       markdown: decryptedCacheRef.current?.markdown ?? "",
@@ -402,53 +685,221 @@ export default function App() {
     });
   }
 
-  function handleCreateChild() {
-    if (!selectedPath || !identity) return;
-    const parent = selectedPath.replace(/\/+$/, "");
-    const next = joinNotePath(parent, "new-child");
-    setSelectedPath(null);
-    setDraft({
-      path: next,
-      title: "新子 note",
-      tags: [],
-      markdown: "",
-      decryptFailed: false
-    });
+  /* ============== 右键菜单触发 ============== */
+
+  function handleFolderAction(action: FolderAction) {
+    switch (action.type) {
+      case "create-note":
+        // 直接传 parentIdOverride，避免 setSelection 异步回退。
+        handleCreateNote(action.folderId);
+        return;
+      case "create-folder":
+        handleCreateFolder(action.folderId);
+        return;
+      case "rename":
+        promptRenameFolder(action.folderId);
+        return;
+      case "delete":
+        handleDeleteFolder(action.folderId);
+        return;
+      case "move-start":
+        setMoveState({ kind: "folder", id: action.folderId });
+        return;
+    }
+  }
+
+  function handleNoteAction(action: NoteAction) {
+    switch (action.type) {
+      case "rename":
+        promptRenameNote(action.noteId);
+        return;
+      case "delete":
+        handleDeleteNote(action.noteId);
+        return;
+      case "move-start":
+        setMoveState({ kind: "note", id: action.noteId });
+        return;
+    }
+  }
+
+  function handleRootAction(action: RootAction) {
+    // 右键根目录 → 新建在根目录下。parentIdOverride = null。
+    if (action.type === "create-note") {
+      handleCreateNote(null);
+      return;
+    }
+    if (action.type === "create-folder") {
+      handleCreateFolder(null);
+      return;
+    }
+  }
+
+  function handleMoveTarget(target: { kind: "folder" | "root"; id: string | null }) {
+    if (!moveState) return;
+    const check = checkDragLegality(
+      space.folders,
+      { kind: moveState.kind, id: moveState.id },
+      target.kind === "root" ? { kind: "root", id: null } : { kind: "folder", id: target.id }
+    );
+    if (!check.ok) {
+      setLastError(describeDragLegalityReason(check.reason!));
+      setMoveState(null);
+      return;
+    }
+    if (moveState.kind === "folder") {
+      handleMoveFolder(moveState.id, target.id);
+    } else {
+      handleMoveNote(moveState.id, target.id);
+    }
+    setMoveState(null);
+  }
+
+  function handleMoveCancel() {
+    setMoveState(null);
+  }
+
+  function promptRenameFolder(folderId: string) {
+    const target = getFolder(space, folderId);
+    if (!target) return;
+    const next = window.prompt("重命名文件夹", target.title);
+    if (next === null) return;
+    handleRenameFolder(folderId, next);
+  }
+
+  function promptRenameNote(noteId: string) {
+    const target = getNote(space, noteId);
+    if (!target) return;
+    const next = window.prompt("重命名 note", target.title);
+    if (next === null) return;
+    handleRenameNote(noteId, next);
+  }
+
+  /* ============== 拖拽 ============== */
+
+  function handleDragStart(kind: "folder" | "note", id: string) {
+    setDragging({ kind, id });
+    setDropHover(null);
+  }
+
+  function handleDragEnd() {
+    setDragging(null);
+    setDropHover(null);
+  }
+
+  function handleDragOverTarget(target: { kind: "folder" | "root"; id: string | null }) {
+    if (!dragging) {
+      setDropHover(null);
+      return;
+    }
+    const check = checkDragLegality(
+      space.folders,
+      dragging,
+      target.kind === "root" ? { kind: "root", id: null } : { kind: "folder", id: target.id }
+    );
+    if (!check.ok) {
+      setDropHover(null);
+      return;
+    }
+    setDropHover(target);
+  }
+
+  function handleDropOnTarget(target: { kind: "folder" | "root"; id: string | null }) {
+    if (!dragging) return;
+    const check = checkDragLegality(
+      space.folders,
+      dragging,
+      target.kind === "root" ? { kind: "root", id: null } : { kind: "folder", id: target.id }
+    );
+    if (!check.ok) {
+      setLastError(describeDragLegalityReason(check.reason!));
+      setDragging(null);
+      setDropHover(null);
+      return;
+    }
+    if (dragging.kind === "folder") {
+      handleMoveFolder(dragging.id, target.id);
+    } else {
+      handleMoveNote(dragging.id, target.id);
+    }
+    setDragging(null);
+    setDropHover(null);
   }
 
   /* ============== 派生 UI 数据 ============== */
 
-  const allTags = useMemo(() => listAllTags(notes), [notes]);
-  const visiblePaths = useMemo(() => {
-    const all = listNotePaths(notes);
-    if (activeTag) {
-      const tagHits = new Set(findPathsByTag(notes, activeTag));
-      return all.filter((p) => tagHits.has(p));
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    // drafts 也算：用户在编辑中的 note 的 tag 也应参与聚合。
+    for (const r of Object.values(space.notes)) {
+      for (const t of r.tags) set.add(t.toLowerCase());
     }
-    return all;
-  }, [notes, activeTag]);
+    for (const r of Object.values(pendingDrafts)) {
+      for (const t of r.tags) set.add(t.toLowerCase());
+    }
+    return [...set].sort();
+  }, [space.notes, pendingDrafts]);
 
-  const draftPathConflict = useMemo(() => {
-    if (!draft) return false;
-    return isPathConflict(notes, normalizeNotePath(draft.path), selectedPath ?? undefined);
-  }, [draft, notes, selectedPath]);
+  /**
+   * 侧栏真正显示的"view space"：持久层 + in-memory pendingDrafts。
+   * drafts 永远不持久化——这里只是把它们"合并"到 UI 上，不进 localStorage。
+   */
+  const viewSpace = useMemo<StoredNotesSpace>(() => {
+    const notes = { ...space.notes };
+    for (const [id, draft] of Object.entries(pendingDrafts)) {
+      // drafts 总是覆盖同名持久记录（不应该发生，作为兜底）。
+      notes[id] = draft;
+    }
+    return { v: 1, folders: space.folders, notes };
+  }, [space, pendingDrafts]);
+
+  /**
+   * 搜索 / tag 过滤后剩余的 note id 集合。
+   * - searchQuery：note.title（trim + 小写）包含 query；
+   * - activeTag：note.tags 含该 tag。
+   * 不过滤 folder：folder 始终显示。
+   */
+  const visibleNoteIds = useMemo<Set<string> | null>(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const tag = activeTag;
+    if (!q && !tag) return null;
+    const ids = new Set<string>();
+    for (const n of Object.values(viewSpace.notes)) {
+      if (tag && !n.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) continue;
+      if (q && !n.title.trim().toLowerCase().includes(q)) continue;
+      ids.add(n.id);
+    }
+    return ids;
+  }, [viewSpace.notes, searchQuery, activeTag]);
+
+  const currentFolder: StoredFolderRecord | null = useMemo(() => {
+    if (selection.kind === "folder" && selection.id !== null) {
+      return space.folders[selection.id] ?? null;
+    }
+    return null;
+  }, [selection, space.folders]);
+
+  const currentNoteRecord: StoredNoteRecord | null = useMemo(() => {
+    if (selection.kind === "note" && selection.id !== null) {
+      return space.notes[selection.id] ?? pendingDrafts[selection.id] ?? null;
+    }
+    return null;
+  }, [selection, space.notes, pendingDrafts]);
 
   const dirty = useMemo(
-    () => draftHasChanges(notes, selectedPath, draft, decryptedCacheRef.current),
-    [notes, selectedPath, draft]
+    () =>
+      draft && selection.kind === "note" && selection.id !== null
+        ? draftHasChanges(space, pendingDrafts, selection.id, draft, decryptedCacheRef.current)
+        : false,
+    [space, pendingDrafts, draft, selection]
   );
 
-  const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
+  const titleError = useMemo(() => {
+    if (!draft) return null;
+    const check = validateTitle(draft.title);
+    return check.ok ? null : check.failure.message;
+  }, [draft]);
 
-  // 给 sidebar 的"按 title 搜索"提供 path → title 真值。
-  // 解密失败的 note 也保留 title（title 是 record 明文字段）。
-  const titlesByPath = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const [path, record] of Object.entries(notes)) {
-      map[path] = record.title;
-    }
-    return map;
-  }, [notes]);
+  const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
 
   /* ============== 渲染 ============== */
 
@@ -472,9 +923,10 @@ export default function App() {
           onForget={() => {
             setIdentity(null);
             setPopupState("idle");
-            setSelectedPath(null);
+            setSelection({ kind: "root", id: null });
             setDraft(null);
-            setNotes({});
+            setSpace({ v: 1, folders: {}, notes: {} });
+            setPendingDrafts({});
             decryptedCacheRef.current = null;
             setLastError(null);
           }}
@@ -483,26 +935,49 @@ export default function App() {
 
       <main className="workspace">
         <NotesSidebar
-          paths={visiblePaths}
-          titlesByPath={titlesByPath}
-          selectedPath={selectedPath}
+          space={viewSpace}
+          visibleNoteIds={visibleNoteIds}
+          selection={selection}
           searchQuery={searchQuery}
           activeTag={activeTag}
-          onSearchQueryChange={setSearchQuery}
-          onActiveTagChange={setActiveTag}
-          onSelect={trySwitchPath}
-          onCreate={handleCreate}
-          allTags={allTags}
+          contextMenu={contextMenu}
+          dragging={dragging}
+          dropHover={dropHover}
+          moveState={moveState}
           ownerLabel={ownerLabel}
           disabled={isLoggingIn}
+          onSelect={trySelect}
+          onCreateNote={handleCreateNote}
+          onCreateFolder={handleCreateFolder}
+          onFolderAction={handleFolderAction}
+          onNoteAction={handleNoteAction}
+          onRootAction={handleRootAction}
+          onContextMenu={setContextMenu}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragOverTarget={handleDragOverTarget}
+          onDropOnTarget={handleDropOnTarget}
+          onMoveTarget={handleMoveTarget}
+          onMoveCancel={handleMoveCancel}
+          onSearchQueryChange={setSearchQuery}
+          onActiveTagChange={setActiveTag}
+          allTags={allTags}
         />
 
         <section className="editor-stage">
           {draft ? (
             <>
               <div className="editor-stage__header">
-                <h2>{draft.title || "未命名 note"}</h2>
-                <code>{draft.path}</code>
+                <input
+                  type="text"
+                  className="editor-stage__filename"
+                  value={draft.title}
+                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                  placeholder="未命名 note"
+                  disabled={!!draft.decryptFailed}
+                  spellCheck={false}
+                />
+                <span className="editor-stage__filename-hint">文件名（保存时会写入 note record）</span>
               </div>
               <NoteEditor
                 markdown={draft.markdown}
@@ -519,7 +994,9 @@ export default function App() {
               {identity ? (
                 <>
                   <h2>选择或新建一个 note</h2>
-                  <p>左侧选择已有 note，或点击 <strong>+ 新建</strong>。</p>
+                  <p>
+                    左侧选择文件夹或 note；右键文件夹可新建 / 删除 / 移动；右键 note 可重命名 / 移动 / 删除。
+                  </p>
                 </>
               ) : (
                 <>
@@ -534,37 +1011,62 @@ export default function App() {
         {draft ? (
           <NoteInspector
             draft={draft}
-            record={selectedPath ? notes[selectedPath] ?? null : null}
-            pathConflict={draftPathConflict}
-            isNew={!selectedPath || !notes[selectedPath]}
+            record={currentNoteRecord}
             isDirty={dirty}
-            // 解密失败的 note：禁止编辑元数据（无法重加密 → 不允许落库）；
-            // 但**仍允许删除**——这是修复"请删除本条"提示自相矛盾的关键。
+            titleError={titleError}
             canEdit={!!identity && !isLoggingIn && !draft.decryptFailed}
             canDelete={!!identity && !isLoggingIn}
             decryptFailed={draft.decryptFailed}
-            onChangePath={(p) => setDraft((prev) => (prev ? { ...prev, path: p } : prev))}
             onChangeTitle={(t) => setDraft((prev) => (prev ? { ...prev, title: t } : prev))}
             onChangeTags={(tags) => setDraft((prev) => (prev ? { ...prev, tags } : prev))}
             onSave={() => void handleSave()}
-            onDelete={handleDelete}
+            onDelete={() => draft.noteId && handleDeleteNote(draft.noteId)}
             onReset={handleReset}
-            onCreateChild={handleCreateChild}
+          />
+        ) : currentFolder ? (
+          <NoteInspector
+            draft={null}
+            record={null}
+            folder={currentFolder}
+            isDirty={false}
+            titleError={null}
+            canEdit={!!identity && !isLoggingIn}
+            canDelete={!!identity && !isLoggingIn}
+            decryptFailed={false}
+            onChangeTitle={() => undefined}
+            onChangeTags={() => undefined}
+            onSave={() => undefined}
+            onDelete={() => handleDeleteFolder(currentFolder.id)}
+            onReset={() => undefined}
           />
         ) : null}
       </main>
 
-      {pendingSwitchPath !== null ? (
+      {pendingDialog ? (
         <div className="confirm-dialog" role="dialog" aria-modal="true">
           <div className="confirm-dialog__box">
-            <h3>放弃未保存的修改？</h3>
-            <p>当前 note 存在未保存修改。继续切换将丢失这些修改。</p>
+            <h3>{pendingDialog.title}</h3>
+            <p>{pendingDialog.message}</p>
             <div className="confirm-dialog__actions">
-              <button type="button" className="secondary-button" onClick={cancelSwitchPath}>
-                继续编辑
+              <button type="button" className="primary-button" onClick={pendingDialog.onDismiss}>
+                知道了
               </button>
-              <button type="button" className="primary-button" onClick={confirmSwitchPath}>
-                放弃并切换
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmDialog ? (
+        <div className="confirm-dialog" role="dialog" aria-modal="true">
+          <div className="confirm-dialog__box">
+            <h3>{confirmDialog.title}</h3>
+            <p>{confirmDialog.message}</p>
+            <div className="confirm-dialog__actions">
+              <button type="button" className="secondary-button" onClick={confirmDialog.onCancel}>
+                {confirmDialog.cancelLabel}
+              </button>
+              <button type="button" className="primary-button" onClick={confirmDialog.onConfirm}>
+                {confirmDialog.confirmLabel}
               </button>
             </div>
           </div>
@@ -583,30 +1085,34 @@ function makeRequestId(): string {
   return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function cryptoRandomId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `note-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function truncate(value: string, head: number): string {
   if (value.length <= head + 4) return value;
   return `${value.slice(0, head)}…${value.slice(-4)}`;
 }
 
 function draftHasChanges(
-  notes: Record<string, StoredNoteRecord>,
-  selectedPath: string | null,
-  draft: NoteDraft | null,
+  space: StoredNotesSpace,
+  pending: Record<string, StoredNoteRecord>,
+  noteId: string | null,
+  draft: NoteDraft,
   cached: DecryptedCache | null
 ): boolean {
-  if (!draft) return false;
-  // 解密失败：UI 已禁用编辑 + 禁止保存；不允许进入"未保存修改"分支。
   if (draft.decryptFailed) return false;
-  if (!selectedPath) {
-    // 新建态：标题 / tags / 任意 markdown 都视为 dirty。
-    return draft.markdown.length > 0 || draft.title.length > 0 || draft.tags.length > 0;
+  if (noteId === null) {
+    return draft.title.length > 0 || draft.tags.length > 0 || draft.markdown.length > 0;
   }
-  const record = notes[selectedPath];
+  const record = space.notes[noteId] ?? pending[noteId];
   if (!record) return true;
-  if (normalizeNotePath(draft.path) !== record.key) return true;
   if (draft.title !== record.title) return true;
   if (draft.tags.join(",") !== record.tags.join(",")) return true;
-  if (cached && cached.path === selectedPath) {
+  if (cached && cached.noteId === noteId) {
     return cached.markdown !== draft.markdown;
   }
   return false;
@@ -639,4 +1145,29 @@ function formatTransportError(error: unknown): string {
   }
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);
+}
+
+/**
+ * 把持久层 notes 与 in-memory pendingDrafts 合并后再做"同目录重名"判断。
+ * 用途：drag / 右键菜单新建 / 右键菜单移动 / 保存重命名 等所有可能跨越两层来源的动作。
+ */
+function isNoteTitleConflictMerged(
+  persisted: Record<string, StoredNoteRecord>,
+  pending: Record<string, StoredNoteRecord>,
+  folderId: string | null,
+  title: string,
+  excludeNoteId: string | null
+): boolean {
+  const trimmed = title.trim();
+  for (const n of Object.values(persisted)) {
+    if (excludeNoteId !== null && n.id === excludeNoteId) continue;
+    if (n.folderId !== folderId) continue;
+    if (n.title.trim() === trimmed) return true;
+  }
+  for (const n of Object.values(pending)) {
+    if (excludeNoteId !== null && n.id === excludeNoteId) continue;
+    if (n.folderId !== folderId) continue;
+    if (n.title.trim() === trimmed) return true;
+  }
+  return false;
 }

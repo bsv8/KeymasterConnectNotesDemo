@@ -1,13 +1,14 @@
 // src/components/NoteEditor.tsx
 // BlockNote 编辑器包装。
 //
-// 设计缘由（施工单第 7 章）：
+// 设计缘由（施工单第 7 章 + 12.6 节）：
 //   - BlockNote 内存态是**编辑**真值；导出 markdown 才是**落库**真值。
 //   - 我们不在持久层存 BlockNote JSON；只存加密的 markdown。
 //   - 外部 `value` (markdown) ↔ 内部 BlockNote document 的转换在编辑器内部完成；
 //     改动通过 `onChange(markdown)` 上抛。
 //   - 块类型只保留 markdown 友好集（paragraph / heading / list / quote /
 //     code / divider）；高级块（image / table / 多列）不引入。
+//   - **不再承载 title 语义**——标题（文件名）改由 editor-stage__filename 输入框收口。
 //   - "保存"动作由父组件在 markdown 稳定后触发；编辑器不做自动保存。
 
 import { useEffect, useMemo, useRef } from "react";
