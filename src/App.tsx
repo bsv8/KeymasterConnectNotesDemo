@@ -1,20 +1,31 @@
 // src/App.tsx
 // Notes Demo 页面级状态与编排。
 //
-// 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 4-10 章
-//          + 2026-06-26 save-tag-folder-ux 第 4-9 章）：
-//   - 页面顶层固定二态：`identity === null` 时只渲染 `LockScreen`；
-//     `identity !== null` 时才渲染 notes 工作区。
-//   - 不在初始化时自动恢复 identity；刷新页面回到 LockScreen 是预期行为，不是缺陷。
-//   - 登录成功后按 `identity.publicKeyHex` 调 `loadOwnerSpace`。
-//   - "切换身份 / 更换登录器" 退回 LockScreen 时统一收口清空 notes 工作区内存态。
-//   - 选中 / 右键菜单 / 拖拽 / 解密缓存等真值仍然集中在 App 这一层。
-//   - 解密失败：note 仍保留；metadata 锁死；删除仍然允许。
-//   - 右键菜单 / 拖拽状态集中在这里管理；sidebar 只负责"显示 + 触发"。
-//   - 保存链路：**原地 patch**——不重选 note、不重置 draft、不重新解密。
+// 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4-10 章）：
+//   - 顶层固定二态：`identity === null` 时只渲染 `LockScreen`；已登录才渲染工作区。
+//   - **当前编辑内存态单真值**：整页只允许存在一份"当前正在编辑的内存态"
+//     `currentEditorState`。它同时承担：
+//       - 当前正在编辑哪条 note（持久化 note 或尚未落库的新建 note）；
+//       - 当前 title / tags / markdown；
+//       - 当前已保存基线（baseline）；
+//       - 是否 `decryptFailed`。
+//   - **不再**有 `pendingDrafts` 这套并行容器——新建 note 一出现就只活在
+//     `currentEditorState`（`kind: "new"`），第一次成功保存后变 `kind: "persisted"`。
+//   - **不再**有 `decryptedCacheRef`——`baseline.markdown` 就是上次解密缓存的明文。
+//   - **不再**用 effect 监听 `space.notes` 变化来覆盖编辑器：
+//     hydration 只在 selection 真正变化到另一个 note 时跑一次；
+//     save 成功只 patch `currentEditorState.baseline`，不重选 note、不重灌。
+//   - **保存阻塞态**统一收口在 `saveOverlay`：用户点击"加密保存"或"保存并切换"时，
+//     页面进入阻塞遮罩，等待 Keymaster 许可；按钮集合随 mode 区分。
+//   - **切换拦截**：未保存修改时点击其他 note / folder / root，弹"保存并切换"遮罩，
+//     不静默切换；decryptFailed 时直接允许切走（无未保存修改）。
+//   - **新建 note** 默认 title 已存在 + save 立即可点；不向 `space.notes` 写空密文占位。
+//   - **文件树标题**：已保存 note 显示 `space.notes` 的 title；当前未保存新 note
+//     显示 `currentEditorState.title`（以 `ephemeralNote` 形式注入 sidebar）。
+//   - 持久化真值 = `space.folders + space.notes`（localStorage）。
+//   - 退出工作区时统一收口清空内存态（包含 `currentEditorState` / `saveOverlay`）。
 //   - 命名交互：新建文件夹 / 重命名文件夹 / 重命名 note 全部走 `NameInputDialog`；
 //     新建时若重名走自动补编号；重命名时若重名直接阻断。
-//   - pending note 的 dirty 判定：markdown 基线 = 空字符串（尚未持久化）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -28,7 +39,15 @@ import {
   parseCipherEncryptResult,
   parseIdentityResult
 } from "./lib/keymaster";
-import { NOTE_CONTENT_TYPE, emptyDraft, normalizeTags, validateTitle, type NoteDraft, type StoredFolderRecord, type StoredNoteRecord } from "./lib/notes";
+import {
+  NOTE_CONTENT_TYPE,
+  normalizeTags,
+  validateTitle,
+  type NoteDraft,
+  type StoredFolderRecord,
+  type StoredNoteRecord
+} from "./lib/notes";
+// 注：`emptyDraft` 不再被使用——编辑真值统一收口到 `currentEditorState`。
 import {
   createFolder,
   deleteFolder,
@@ -36,7 +55,6 @@ import {
   deleteOwnerSpace,
   findAvailableName,
   getFolder,
-  getNote,
   isFolderEmpty,
   isFolderTitleConflict,
   isNoteTitleConflict,
@@ -50,11 +68,12 @@ import {
 } from "./lib/storage";
 import { checkDragLegality, describeDragLegalityReason } from "./lib/path";
 import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
-import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState } from "./components/NotesSidebar";
+import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState, type SidebarSelection } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
 import { NoteInspector } from "./components/NoteInspector";
 import { LockScreen } from "./components/LockScreen";
 import { NameInputDialog } from "./components/NameInputDialog";
+import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
 
 /** 新建 note / folder 的默认基名（自动补编号时按 "基名 N" 递增）。 */
 const DEFAULT_NOTE_BASE_NAME = "新 note";
@@ -72,15 +91,49 @@ interface IdentitySnapshot {
   resolvedAt: number;
 }
 
-interface DecryptedCache {
+/**
+ * 当前编辑内存态：全页唯一。
+ * 边界：永远只存在 0 份或 1 份；不进 localStorage。
+ *
+ * - `kind: "new"`：尚未落库的新建 note；保存成功后变 `kind: "persisted"`。
+ * - `kind: "persisted"`：与 `space.notes[id]` 一一对应。
+ *   `baseline` 记录的是"最近一次解密/保存时的快照"——dirty 比较的基线。
+ * - `loading: true` 时正在解密 / 加载中，markdown 是占位符；
+ *   该状态下**不能**视为 dirty、**不能**编辑、**不能**保存。
+ * - `decryptFailed: true` 时 markdown 不可编辑；title / tags 也被锁住。
+ *
+ * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4.2 / 5 章 +
+ *          后续修复："解密中..." 占位态不能被算成 dirty）：
+ *   - 这是页面"编辑真值"的唯一来源。
+ *   - 文件树 / 持久层 / 侧栏都派生自此 + `space.notes`；不互相反向覆盖。
+ *   - `loading` 与 `decryptFailed` 是两个独立维度：loading 是过程，decryptFailed 是结果。
+ */
+export interface CurrentEditorState {
+  /** 该 note 的 id。`kind: "new"` 时是新生成的临时 id（首次保存后变 persisted id）。 */
   noteId: string;
+  kind: "new" | "persisted";
+  /** 所属文件夹 id；根目录下为 null。 */
+  folderId: string | null;
+  /** 当前 title（用户可编辑；loading / decryptFailed / saving 时锁住）。 */
+  title: string;
+  /** 当前 tags（用户可编辑；loading / decryptFailed / saving 时锁住）。 */
+  tags: string[];
+  /** 当前 markdown（用户可编辑；loading / decryptFailed / saving 时锁住）。 */
   markdown: string;
-}
-
-interface Selection {
-  kind: "folder" | "note" | "root";
-  /** folder 时是 folderId；note 时是 noteId；"root" 时为 null。 */
-  id: string | null;
+  /** 已保存基线：title / tags / markdown 跟这里比对决定 dirty。 */
+  baseline: {
+    title: string;
+    tags: string[];
+    markdown: string;
+  };
+  /**
+   * 是否处于"加载中"（仅 `kind: "persisted"` 才有意义）：
+   * 切换 note 后 `openPersistedNote` 同步置 true，await 解密完才置 false。
+   * `kind: "new"` 永远 false。
+   */
+  loading: boolean;
+  /** 解密失败态。 */
+  decryptFailed: boolean;
 }
 
 interface PendingDialog {
@@ -100,11 +153,31 @@ interface ConfirmDialog {
 }
 
 /**
+ * "保存成功之后要做的事"：
+ *   - `none`：什么都不做（主动保存路径）；
+ *   - `switch`：切到 `target`；
+ *   - `create-note`：在 `parentId` 下创建新 note。
+ */
+type AfterSaveAction =
+  | { kind: "none" }
+  | { kind: "switch"; target: SidebarSelection }
+  | { kind: "create-note"; parentId: string | null };
+
+/**
+ * 保存阻塞遮罩状态机。
+ *   - `mode: "save"`：用户主动点 save；按钮只有 `取消`；成功后停留在 action。
+ *   - `mode: "save-and-switch"`：用户有未保存修改并尝试切换 / 新建；
+ *     按钮只有 `保存并切换` / `取消`；保存成功后按 `action` 派发。
+ *
+ * `action` 在两种模式下都有意义——`save` 模式下也是 `none`（停留）。
+ */
+interface SaveOverlayState {
+  mode: "save" | "save-and-switch";
+  action: AfterSaveAction;
+}
+
+/**
  * 页面内命名弹层的输入定义。
- * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.5 / 4.6 / 6 章）：
- *   - 三类动作（新建文件夹 / 重命名文件夹 / 重命名 note）共用同一个弹层组件；
- *   - 弹层内部 `validate` 由 App 注入，确保重命名阻断 / 新建自动补编号的语义区分；
- *   - onConfirm 拿到的是用户最终提交值；App 决定是否补编号、如何落库。
  */
 type NameDialogMode =
   | {
@@ -140,16 +213,34 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
+  /** 持久化真值：folder + 已落库 note。 */
   const [space, setSpace] = useState<StoredNotesSpace>({ v: 1, folders: {}, notes: {} });
+
   /**
-   * 未保存的 note draft；只活在内存，**不**进 localStorage。
-   * 边界：note 的真值（带 cipher）只能由 `handleSave` 落库。
-   * 这是硬切换的高严重性修复：新建时不再把空密文记录写到持久层。
+   * 侧栏高亮：folder / root / note。note 选中态一定与 `currentEditorState.noteId` 同步。
+   * folder / root 选中态是独立的"上一次点过的位置"。
    */
-  const [pendingDrafts, setPendingDrafts] = useState<Record<string, StoredNoteRecord>>({});
-  const [selection, setSelection] = useState<Selection>({ kind: "root", id: null });
-  const [draft, setDraft] = useState<NoteDraft | null>(null);
+  const [selection, setSelection] = useState<SidebarSelection>({ kind: "root", id: null });
+
+  /**
+   * 当前编辑内存态：全页唯一。null = 没有正在编辑的 note。
+   * 边界：永远只存在 0 份或 1 份；不进 localStorage；切换 note 时整块替换。
+   */
+  const [currentEditorState, setCurrentEditorState] = useState<CurrentEditorState | null>(null);
+  /**
+   * 镜像 `currentEditorState` 的 ref。
+   * - 在每个 setCurrentEditorState 之后同步写入；
+   * - 让 `openPersistedNote` 的异步分支能读到"截至此刻的"最新 noteId，
+   *   避免 stale closure 误判"应该应用结果"。
+   */
+  const currentEditorStateRef = useRef<CurrentEditorState | null>(null);
+
+  /** 解密错误文案（用于 editor-stage 顶栏红条）。 */
   const [decryptError, setDecryptError] = useState<string | null>(null);
+
+  /** 保存阻塞遮罩。null = 不显示。 */
+  const [saveOverlay, setSaveOverlay] = useState<SaveOverlayState | null>(null);
+
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -168,8 +259,27 @@ export default function App() {
   /** 页面内命名弹层：null = 不显示。 */
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
 
-  const decryptedCacheRef = useRef<DecryptedCache | null>(null);
   const sessionRef = useRef<PopupSessionClient | null>(null);
+  /**
+   * 用户在 save 遮罩上点 `取消` 的标志。
+   * 见 `performSave` / `handleSaveOverlayCancel` 详细设计缘由。
+   */
+  const saveCancelledRef = useRef(false);
+  /**
+   * `openPersistedNote` 的串行化链：
+   *   - `PopupSessionClient.runRequest` 一次只允许一条 in-flight；
+   *   - 多次 `openPersistedNote` 并发调用时，**必须**串行排队，否则后续调用会抛
+   *     `session_busy` 并被错误地当成"该 note 解密失败"；
+   *   - 链上每条新 promise 都 `await` 上一个，让 session 一次只跑一个；
+   *   - 完成时通过 `opId` 检查是否已被更新的打开请求取代；过期就丢弃结果。
+   */
+  const openChainRef = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * 递增的"当前打开操作"id。每次 `openPersistedNote` 调用都自增并捕获。
+   * 异步结果回来时，只有 `openOperationRef.current === myOp` 的那次才允许应用结果；
+   * 否则丢弃（用户已切到别的 note，或当前 note 已被更新打开）。
+   */
+  const openOperationRef = useRef(0);
 
   const normalizedTargetOrigin = useMemo(() => {
     try {
@@ -226,23 +336,33 @@ export default function App() {
     };
   }, [contextMenu]);
 
+  // 同步 `currentEditorState` 到 ref，让异步分支能读到最新值。
+  useEffect(() => {
+    currentEditorStateRef.current = currentEditorState;
+  }, [currentEditorState]);
+
   /* ============== 加载当前 owner 的空间 ============== */
 
   useEffect(() => {
     if (!identity) {
       setSpace({ v: 1, folders: {}, notes: {} });
-      setPendingDrafts({});
       setSelection({ kind: "root", id: null });
-      setDraft(null);
-      decryptedCacheRef.current = null;
+      setCurrentEditorState(null);
+      setDecryptError(null);
+      saveCancelledRef.current = false;
+      // 重置 open 链 / opId：旧 owner 留下的链上 promise 全部过期。
+      openOperationRef.current = 0;
+      openChainRef.current = Promise.resolve();
       return;
     }
     const loaded = loadOwnerSpace(identity.publicKeyHex);
     setSpace(loaded);
-    setPendingDrafts({});
     setSelection({ kind: "root", id: null });
-    setDraft(null);
-    decryptedCacheRef.current = null;
+    setCurrentEditorState(null);
+    setDecryptError(null);
+    saveCancelledRef.current = false;
+    openOperationRef.current = 0;
+    openChainRef.current = Promise.resolve();
   }, [identity?.publicKeyHex]);
 
   /* ============== 日志 ============== */
@@ -295,93 +415,130 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normalizedTargetOrigin, currentOrigin]);
 
-  /* ============== 选中辅助 ============== */
+  /* ============== 切换拦截 ============== */
 
-  function trySelect(next: Selection) {
-    // 切换 note 时若 draft 有未保存修改，弹确认。
-    if (
-      draft &&
-      selection.kind === "note" &&
-      selection.id !== null &&
-      (next.kind !== "note" || next.id !== selection.id) &&
-      draftHasChanges(space, pendingDrafts, selection.id, draft, decryptedCacheRef.current)
-    ) {
-      setConfirmDialog({
-        title: "放弃未保存的修改？",
-        message: "当前 note 存在未保存修改。继续切换将丢失这些修改。",
-        confirmLabel: "放弃并切换",
-        cancelLabel: "继续编辑",
-        onConfirm: () => {
-          setConfirmDialog(null);
-          applySelection(next);
-        },
-        onCancel: () => setConfirmDialog(null)
-      });
+  /**
+   * 侧栏点击 → 选中目标。
+   *
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.2 / 7.4 章）：
+   *   - 若当前没有 editorState、或当前是 decryptFailed、或选中的就是当前 note：
+   *     直接 `applySelection`；
+   *   - 若当前是 dirty（任何已落库 note 的修改，或新建 note 的存在）：
+   *     弹"保存并切换"遮罩，**不**静默切走。
+   */
+  function trySelect(next: SidebarSelection) {
+    const current = currentEditorState;
+    // 同 note 重复点击：no-op。
+    if (current && next.kind === "note" && next.id === current.noteId) {
       return;
     }
-    applySelection(next);
+    if (!current) {
+      applySelection(next);
+      return;
+    }
+    if (current.decryptFailed) {
+      // 解密失败态：当前没有"未保存修改"概念，直接允许切换。
+      applySelection(next);
+      return;
+    }
+    if (!isDirty(current)) {
+      applySelection(next);
+      return;
+    }
+    // dirty：弹"保存并切换"遮罩，保留当前 editorState。
+    setSaveOverlay({ mode: "save-and-switch", action: { kind: "switch", target: next } });
   }
 
-  function applySelection(next: Selection) {
+  /**
+   * 真正落地一次 selection 切换：
+   *   - folder / root：清空 editorState（也清空 selection 的 note 高亮）；
+   *   - note：打开（已持久化 → 解密 + 装载 baseline；新建态在新建流程里已装载）。
+   *   - 同一 note 已在编辑：no-op。
+   */
+  function applySelection(next: SidebarSelection) {
     setSelection(next);
     if (next.kind !== "note" || next.id === null) {
-      setDraft(null);
+      setCurrentEditorState(null);
       setDecryptError(null);
-      decryptedCacheRef.current = null;
+      return;
     }
+    const noteId = next.id;
+    // 已在编辑该 note：no-op。
+    if (currentEditorState && currentEditorState.noteId === noteId) {
+      return;
+    }
+    const persisted = space.notes[noteId];
+    if (!persisted) {
+      // 找不到 record（已被外部删掉等）：回退到 root。
+      setCurrentEditorState(null);
+      setSelection({ kind: "root", id: null });
+      setDecryptError(null);
+      return;
+    }
+    void openPersistedNote(persisted);
   }
 
-  /* ============== 选中后：解密 note 加载到 draft ============== */
+  /* ============== 解密 / 装载 baseline ============== */
 
-  useEffect(() => {
-    if (selection.kind !== "note" || selection.id === null) {
-      setDraft(null);
-      return;
-    }
-    const noteId = selection.id;
-    const persisted = space.notes[noteId];
-    const pending = pendingDrafts[noteId];
-    if (!persisted && !pending) {
-      setDraft(null);
-      return;
-    }
-    if (pending) {
-      // 未保存 draft：直接显示，不解密。
-      setDraft({
-        noteId: pending.id,
-        title: pending.title,
-        tags: [...pending.tags],
-        markdown: decryptedCacheRef.current?.markdown ?? "",
-        decryptFailed: false
-      });
-      setDecryptError(null);
-      return;
-    }
-    if (decryptedCacheRef.current && decryptedCacheRef.current.noteId === persisted!.id) {
-      setDraft({
-        noteId: persisted!.id,
-        title: persisted!.title,
-        tags: [...persisted!.tags],
-        markdown: decryptedCacheRef.current.markdown,
-        decryptFailed: false
-      });
-      setDecryptError(null);
-      return;
-    }
-    void openNote(persisted!);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection.kind, selection.id, space.notes, pendingDrafts]);
-
-  async function openNote(record: StoredNoteRecord) {
+  /**
+   * 解密一条已持久化 note 并装载为 `currentEditorState`。
+   * 边界：调用前保证 `selection.id === record.id`；调用后 selection / editorState 同步。
+   *
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 7.6 章）：
+   *   - 这是 hydration 的**唯一**入口；只跑在用户主动切换 note 时。
+   *   - **不**监听 `space.notes` 变化重新触发——保存后的 record 更新不会回灌当前 editor。
+   */
+  /**
+   * 解密一条已持久化 note 并装载为 `currentEditorState`。
+   * 边界：调用前保证 `selection.id === record.id`；调用后 selection / editorState 同步。
+   *
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 7.6 章 +
+   *          后续修复：快速切换 note 时的 in-flight 竞态）：
+   *   - hydration 的**唯一**入口；只跑在用户主动切换 note 时。
+   *   - **不**监听 `space.notes` 变化重新触发——保存后的 record 更新不会回灌当前 editor。
+   *   - 串行化：每次调用都进 `openChainRef` 链，`await previous` 让 session
+   *     一次只跑一个；避免后到的请求因 `session_busy` 被错判成"该 note 解密失败"。
+   *   - opId 隔离：每次调用捕获 `myOp = ++openOperationRef.current`；
+   *     异步结果回来时若 `openOperationRef.current !== myOp`，说明用户已经
+   *     切到别的 note、或者重新打开同一 note，**丢弃**结果不写 state。
+   *   - 失败：currentEditorState 锁成 `decryptFailed`，record 保留以供重试；
+   *     但**仅**当本调用还是"最新一次打开"时才写。
+   */
+  async function openPersistedNote(record: StoredNoteRecord) {
+    const myOp = ++openOperationRef.current;
     setDecryptError(null);
-    setDraft({
+    // 先填"已锁 / 解密中"的占位 editor state，避免 editor-stage 闪空。
+    // `loading: true` 让 `isDirty()` / `canSave` / 标题/标签/正文输入全部锁住，
+    // 防止用户在解密完成前误保存"（解密中...）"占位。
+    setCurrentEditorState({
       noteId: record.id,
+      kind: "persisted",
+      folderId: record.folderId,
       title: record.title,
       tags: [...record.tags],
       markdown: "（解密中...）",
+      baseline: {
+        title: record.title,
+        tags: [...record.tags],
+        markdown: ""
+      },
+      loading: true,
       decryptFailed: false
     });
+
+    // 串行化：链接本调用；本调用必须等上一个完全跑完才发请求。
+    const previous = openChainRef.current;
+    let release: () => void = () => undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    openChainRef.current = blocked;
+
     try {
+      await previous;
+      // 等待期间可能被新的打开操作取代；opId 不再是最新就什么都不做。
+      if (openOperationRef.current !== myOp) return;
+
       const session = getSessionClient();
       const request = buildCipherDecryptRequest({
         text: "向 Notes Demo 解密该 note 的 markdown 内容",
@@ -390,29 +547,59 @@ export default function App() {
         requestId: makeRequestId()
       });
       const response = await session.runRequest(request);
+      // 拿到结果后再次检查：用户可能在 in-flight 期间点了别的 note。
+      if (openOperationRef.current !== myOp) return;
+      // 兜底：当前 currentEditorState 已被更新的打开覆盖；不写回陈旧结果。
+      // 注：`currentEditorState` 在闭包里是组件渲染时捕获的快照；opId 已经覆盖了
+      // 同一时序窗口，但这一行给"读 ref 时序"再上一道保险。
+      if (currentEditorStateRef.current && currentEditorStateRef.current.noteId !== record.id) {
+        return;
+      }
       if (!response.ok) {
         throw new Error(formatProtocolError(response.error.code, response.error.message));
       }
       const decrypted = parseCipherDecryptResult(response.result as never);
-      decryptedCacheRef.current = { noteId: record.id, markdown: decrypted };
-      setDraft({
+      // 解密成功：完整装载 baseline，loading 置 false。
+      setCurrentEditorState({
         noteId: record.id,
+        kind: "persisted",
+        folderId: record.folderId,
         title: record.title,
         tags: [...record.tags],
         markdown: decrypted,
+        baseline: {
+          title: record.title,
+          tags: [...record.tags],
+          markdown: decrypted
+        },
+        loading: false,
         decryptFailed: false
       });
       setDecryptError(null);
     } catch (err) {
+      if (openOperationRef.current !== myOp) return;
+      if (currentEditorStateRef.current && currentEditorStateRef.current.noteId !== record.id) {
+        return;
+      }
       setDecryptError(formatTransportError(err));
-      setDraft({
+      setCurrentEditorState({
         noteId: record.id,
+        kind: "persisted",
+        folderId: record.folderId,
         title: record.title,
         tags: [...record.tags],
         markdown: "",
+        baseline: {
+          title: record.title,
+          tags: [...record.tags],
+          markdown: ""
+        },
+        loading: false,
         decryptFailed: true
       });
       // 注意：**不**清空 record；保留密文以供后续重试。
+    } finally {
+      release();
     }
   }
 
@@ -420,11 +607,7 @@ export default function App() {
 
   function resolveCreateParent(): string | null {
     if (selection.kind === "folder" && selection.id !== null) return selection.id;
-    if (selection.kind === "note" && selection.id !== null) {
-      const note = space.notes[selection.id] ?? pendingDrafts[selection.id];
-      return note?.folderId ?? null;
-    }
-    // root：根目录。
+    if (currentEditorState) return currentEditorState.folderId;
     return null;
   }
 
@@ -433,55 +616,66 @@ export default function App() {
    * 导致新建位置回退到"之前选中的位置"。
    * 未传 override 时，回退到 `resolveCreateParent()`（用于顶部 + note / + 文件夹 按钮）。
    *
-   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.4 / 4.5 章）：
-   *   - 新建 note 走默认基名 `新 note`；同目录已有同名时自动按 `新 note 2`、`新 note 3` ... 递增；
-   *   - "同目录"判断同时覆盖 `space.notes` 与 `pendingDrafts`，避免 UI 上看见重名但检查没算进去；
-   *   - note **不**弹输入框，直接创建。
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 7.5 章）：
+   *   - 新建 note **不**写入 `space.notes` 占位 record；
+   *   - 直接在 `currentEditorState` 里挂一份 `kind: "new"` 的内存态；
+   *   - 默认 title = 同目录唯一名（自动补编号）；
+   *   - 创建后 save 立即可点（dirty = true）；
+   *   - 已 dirty 时再次新建：弹"保存并切换"遮罩（action = create-note），
+   *     避免静默丢弃当前编辑。
    */
   function handleCreateNote(parentIdOverride?: string | null) {
     if (!identity) return;
     const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
-    // 1. 收集同目录下已有 note 的标题（persisted + pending）。
-    const taken = collectNoteTitlesInFolder(parentId);
-    // 2. 自动补编号。
-    const title = findAvailableName(DEFAULT_NOTE_BASE_NAME, taken);
-    const now = Date.now();
-    const id = cryptoRandomId();
-    const draftNote: StoredNoteRecord = {
-      v: 2,
-      id,
-      folderId: parentId,
-      title,
-      tags: [],
-      createdAt: now,
-      updatedAt: now,
-      cipher: { contentType: NOTE_CONTENT_TYPE, nonceBase64: "", cipherbytesBase64: "" }
-    };
-    // 关键：**只**写入 in-memory pendingDrafts，不进 space / localStorage。
-    setPendingDrafts((prev) => ({ ...prev, [id]: draftNote }));
-    setLastError(null);
-    setSelection({ kind: "note", id });
-    setDraft({
-      noteId: id,
-      title: draftNote.title,
-      tags: [...draftNote.tags],
-      markdown: "",
-      decryptFailed: false
-    });
-    decryptedCacheRef.current = null;
+    // 已 dirty 且有未保存修改：弹"保存并切换"遮罩，action = create-note。
+    if (currentEditorState && !currentEditorState.decryptFailed && isDirty(currentEditorState)) {
+      setSaveOverlay({
+        mode: "save-and-switch",
+        action: { kind: "create-note", parentId }
+      });
+      return;
+    }
+    doCreateNote(parentId);
   }
 
   /**
-   * 在指定的父目录下，合并 persisted 与 pending，收集所有 note 的 title。
-   * 用于"新建 note 时自动补编号"。
+   * 真正落地一次"新建 note"：
+   *   - 不写 `space.notes`；
+   *   - 直接装载 `currentEditorState`（kind: "new"）。
+   *   - `selection` 切到新建 note。
+   */
+  function doCreateNote(parentId: string | null) {
+    if (!identity) return;
+    const taken = collectNoteTitlesInFolder(parentId);
+    const title = findAvailableName(DEFAULT_NOTE_BASE_NAME, taken);
+    const id = cryptoRandomId();
+    setCurrentEditorState({
+      noteId: id,
+      kind: "new",
+      folderId: parentId,
+      title,
+      tags: [],
+      markdown: "",
+      baseline: { title: "", tags: [], markdown: "" },
+      loading: false,
+      decryptFailed: false
+    });
+    setSelection({ kind: "note", id });
+    setDecryptError(null);
+    setLastError(null);
+  }
+
+  /**
+   * 在指定的父目录下，收集所有 note 的 title（持久层 + 当前未保存新 note）。
+   * 用于"新建 note 时自动补编号"以及"重命名 / 保存时的同目录冲突检查"。
    */
   function collectNoteTitlesInFolder(folderId: string | null): string[] {
     const out: string[] = [];
     for (const n of Object.values(space.notes)) {
       if (n.folderId === folderId) out.push(n.title);
     }
-    for (const n of Object.values(pendingDrafts)) {
-      if (n.folderId === folderId) out.push(n.title);
+    if (currentEditorState && currentEditorState.kind === "new" && currentEditorState.folderId === folderId) {
+      out.push(currentEditorState.title);
     }
     return out;
   }
@@ -500,11 +694,6 @@ export default function App() {
 
   /**
    * 新建文件夹：先开页面内命名弹层，让用户输入名字再真正创建。
-   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.5 / 6.8 / 6.9 章）：
-   *   - 不再"先创建默认名，再立刻弹重命名"；
-   *   - 不再用 `window.prompt`；
-   *   - 用户在弹层中输入的值 `trim` 后若非空，再走"自动补编号"；
-   *   - 取消 / 关闭弹层 = 没发生过，不改 selection / draft / space。
    */
   function handleCreateFolder(parentIdOverride?: string | null) {
     if (!identity) return;
@@ -521,10 +710,7 @@ export default function App() {
   }
 
   /**
-   * 弹层确认回调：
-   *   - "新建文件夹"：trim 后走 `findAvailableName` 自动补编号，然后创建；
-   *   - "重命名文件夹 / 重命名 note"：trim 后直接走持久层；重名由 validate 阻断，
-   *     这里只处理成功路径。
+   * 弹层确认回调。
    */
   function handleNameDialogConfirm(value: string) {
     const dialog = nameDialog;
@@ -535,7 +721,6 @@ export default function App() {
       const finalTitle = findAvailableName(trimmed, taken);
       const result = createFolder(space, { parentId: dialog.mode.parentId, title: finalTitle });
       if (!result) {
-        // 极端兜底：自动补编号理论上不会触发冲突，但保险起见保留路径。
         setLastError("新建文件夹失败：未知原因。");
         setNameDialog(null);
         return;
@@ -543,7 +728,7 @@ export default function App() {
       commitSpace(result.next);
       setLastError(null);
       setSelection({ kind: "folder", id: result.folder.id });
-      setDraft(null);
+      setCurrentEditorState(null);
       setNameDialog(null);
       return;
     }
@@ -551,7 +736,6 @@ export default function App() {
       const trimmed = value.trim();
       const result = renameFolder(space, dialog.mode.folderId, trimmed);
       if (!result) {
-        // 阻断已在弹层内做了 inline 提示，正常路径下不会进来。
         setLastError("重命名失败：同目录下已有同名文件夹。");
         setNameDialog(null);
         return;
@@ -564,25 +748,24 @@ export default function App() {
     // rename-note
     const trimmed = value.trim();
     const noteId = dialog.mode.noteId;
-    // pending draft
-    if (pendingDrafts[noteId]) {
-      const target = pendingDrafts[noteId];
-      if (isNoteTitleConflictMerged(space.notes, pendingDrafts, target.folderId, trimmed, noteId)) {
+    // 1) 当前 editor state 是该 note → 原地 patch 即可。
+    if (currentEditorState && currentEditorState.noteId === noteId) {
+      if (currentEditorState.loading) {
+        // 防御性：解密未完成时不动 title（避免覆盖密文的真值）。
+        setNameDialog(null);
+        return;
+      }
+      if (isNoteTitleConflictWithEditor(space.notes, currentEditorState.folderId, trimmed, noteId, currentEditorState)) {
         setLastError("重命名失败：同目录下已有同名 note。");
         setNameDialog(null);
         return;
       }
-      setPendingDrafts((prev) => ({
-        ...prev,
-        [noteId]: { ...target, title: trimmed, updatedAt: Date.now() }
-      }));
-      if (draft && draft.noteId === noteId) {
-        setDraft({ ...draft, title: trimmed });
-      }
+      setCurrentEditorState({ ...currentEditorState, title: trimmed });
       setLastError(null);
       setNameDialog(null);
       return;
     }
+    // 2) 否则：已持久化 note 的重命名走 storage。
     const target = space.notes[noteId];
     if (!target) {
       setNameDialog(null);
@@ -595,26 +778,19 @@ export default function App() {
     }
     const updated: StoredNoteRecord = { ...target, title: trimmed, updatedAt: Date.now() };
     commitSpace(putNote(space, updated));
-    if (draft && draft.noteId === noteId) {
-      setDraft({ ...draft, title: trimmed });
-    }
     setLastError(null);
     setNameDialog(null);
   }
 
   /**
    * 弹层关闭 / 取消回调：当作没发生过。
-   * 设计缘由（施工单 7.6 章）：不改 selection / draft / space / pendingDrafts。
    */
   function handleNameDialogCancel() {
     setNameDialog(null);
   }
 
   /**
-   * 弹层内联校验：
-   *   - 重命名 folder / note：trim 后若与同父目录已有记录（排除自己）重名 → 阻断文案；
-   *   - 新建 folder：弹层**不**阻断重名（直接交给自动补编号），所以 validate 返回 null。
-   * 这里的语义必须分清：自动补编号 vs 阻断。
+   * 弹层内联校验。
    */
   function validateNameDialogValue(value: string): string | null {
     const dialog = nameDialog;
@@ -631,9 +807,16 @@ export default function App() {
       return null;
     }
     // rename-note
-    const target = space.notes[dialog.mode.noteId] ?? pendingDrafts[dialog.mode.noteId];
+    const noteId = dialog.mode.noteId;
+    if (currentEditorState && currentEditorState.noteId === noteId) {
+      if (isNoteTitleConflictWithEditor(space.notes, currentEditorState.folderId, value, noteId, currentEditorState)) {
+        return "同目录下已有同名 note。";
+      }
+      return null;
+    }
+    const target = space.notes[noteId];
     if (!target) return null;
-    if (isNoteTitleConflictMerged(space.notes, pendingDrafts, target.folderId, value, dialog.mode.noteId)) {
+    if (isNoteTitleConflict(space.notes, target.folderId, value, noteId)) {
       return "同目录下已有同名 note。";
     }
     return null;
@@ -651,33 +834,46 @@ export default function App() {
     commitSpace(deleteFolder(space, folderId));
     if (selection.kind === "folder" && selection.id === folderId) {
       setSelection({ kind: "root", id: null });
-      setDraft(null);
+      setCurrentEditorState(null);
     }
     setLastError(null);
   }
 
   function handleDeleteNote(noteId: string) {
-    // pending draft：直接从内存里丢；不持久化、不弹任何"非空"等对话框。
-    if (pendingDrafts[noteId]) {
-      setPendingDrafts((prev) => {
-        const next = { ...prev };
-        delete next[noteId];
-        return next;
-      });
-      if (selection.kind === "note" && selection.id === noteId) {
+    // 当前正在编辑该 note：
+    //   - `kind: "persisted"`：**必须**走 storage 真正删掉持久化记录，再清内存态；
+    //   - `kind: "new"`：note 还没落库，仅清内存态即可，不动 storage。
+    if (currentEditorState && currentEditorState.noteId === noteId) {
+      if (currentEditorState.kind === "persisted") {
+        if (!space.notes[noteId]) {
+          // 异常态：editor 说 persisted 但 storage 里没有——保守起见只清内存态。
+          setCurrentEditorState(null);
+          setSelection({ kind: "root", id: null });
+          setDecryptError(null);
+          setLastError(null);
+          return;
+        }
+        commitSpace(deleteNote(space, noteId));
+        setCurrentEditorState(null);
         setSelection({ kind: "root", id: null });
-        setDraft(null);
-        decryptedCacheRef.current = null;
+        setDecryptError(null);
+        setLastError(null);
+        return;
       }
+      // kind === "new"：未持久化，仅清内存态。
+      setCurrentEditorState(null);
+      setSelection({ kind: "root", id: null });
+      setDecryptError(null);
       setLastError(null);
       return;
     }
+    // 否则：未在编辑的已持久化 note 的删除走 storage。
     if (!space.notes[noteId]) return;
     commitSpace(deleteNote(space, noteId));
     if (selection.kind === "note" && selection.id === noteId) {
       setSelection({ kind: "root", id: null });
-      setDraft(null);
-      decryptedCacheRef.current = null;
+      setCurrentEditorState(null);
+      setDecryptError(null);
     }
     setLastError(null);
   }
@@ -697,10 +893,13 @@ export default function App() {
   }
 
   function handleMoveNote(noteId: string, newFolderId: string | null) {
-    // pending draft：folderId 直接在内存里改；不动 space，不写盘。
-    if (pendingDrafts[noteId]) {
-      const target = pendingDrafts[noteId];
-      if (isNoteTitleConflictMerged(space.notes, pendingDrafts, newFolderId, target.title, noteId)) {
+    // 当前 editor state 是该 note（new 或 persisted）：直接 patch folderId。
+    if (currentEditorState && currentEditorState.noteId === noteId) {
+      if (currentEditorState.loading) {
+        // 防御性：解密未完成时不动 folderId（避免覆盖密文的真值）。
+        return;
+      }
+      if (isNoteTitleConflictWithEditor(space.notes, newFolderId, currentEditorState.title, noteId, currentEditorState)) {
         setPendingDialog({
           title: "无法移动 note",
           message: "目标目录下已有同名 note，请改文件名或换目标文件夹。",
@@ -708,13 +907,11 @@ export default function App() {
         });
         return;
       }
-      setPendingDrafts((prev) => ({
-        ...prev,
-        [noteId]: { ...target, folderId: newFolderId, updatedAt: Date.now() }
-      }));
+      setCurrentEditorState({ ...currentEditorState, folderId: newFolderId });
       setLastError(null);
       return;
     }
+    // 否则：已持久化 note 的移动走 storage。
     const next = moveNote(space, noteId, newFolderId);
     if (!next) {
       setPendingDialog({
@@ -736,46 +933,98 @@ export default function App() {
   /* ============== 保存 ============== */
 
   /**
-   * 保存链路：**原地 patch**。
-   *
-   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.1 / 5.1 / 6.6 / 6.7 章）：
-   *   - 保存成功后**不**重新走 `openNote`、**不**把 draft 先置空再回填、**不**改 selection；
-   *   - 步骤顺序必须为：
-   *       (1) 同步 `decryptedCacheRef`；
-   *       (2) 把 record 写入 space + 持久层；
-   *       (3) 若是 pending note，从 `pendingDrafts` 移除（避免重新触发选中 effect）；
-   *       (4) 仅 patch 当前 `draft` 的元数据（id / title / tags），markdown 保留。
-   *   - 这条顺序必须保证 hydration effect 不会把刚保存好的当前 draft 又覆盖掉。
+   * 主动点击 save 按钮的入口。
    */
   async function handleSave() {
-    if (!identity || !draft) return;
-    // 解密失败：禁止保存（不覆盖密文）。
-    if (draft.decryptFailed) {
+    if (!identity || !currentEditorState) return;
+    if (saveOverlay !== null) return; // 已经在阻塞态，不重复开。
+    const state = currentEditorState;
+    if (state.decryptFailed) {
       setLastError("当前 note 解密失败，无法重新加密保存。请删除或切换 origin / active key 后重试。");
       return;
     }
-    const titleCheck = validateTitle(draft.title);
+    if (state.loading) {
+      // 防御性：UI 上 save 按钮已 disabled，但 handler 也再挡一次。
+      setLastError("当前 note 正在解密中，无法保存。请等待解密完成。");
+      return;
+    }
+    const titleCheck = validateTitle(state.title);
     if (!titleCheck.ok) {
       setLastError(`保存失败：${titleCheck.failure.message}`);
       return;
     }
-    const noteId = draft.noteId;
-    const isPending = noteId !== null && pendingDrafts[noteId] !== undefined;
-    const existingPersisted: StoredNoteRecord | null =
-      noteId !== null ? space.notes[noteId] ?? null : null;
-    const existingPending: StoredNoteRecord | null =
-      noteId !== null ? pendingDrafts[noteId] ?? null : null;
-    const existing = existingPersisted ?? existingPending;
-    const isNew = existing === null;
-    // 同目录冲突：drafts 与 persisted 都要纳入；排除自己。
-    const folderIdForCheck = isNew ? resolveCreateParent() : existing!.folderId;
-    if (isNoteTitleConflictMerged(space.notes, pendingDrafts, folderIdForCheck, titleCheck.title, noteId)) {
+    if (
+      isNoteTitleConflictWithEditor(
+        space.notes,
+        state.folderId,
+        titleCheck.title,
+        state.noteId,
+        state
+      )
+    ) {
       setLastError(`保存失败：当前目录下已有同名 note "${titleCheck.title}"。`);
       return;
     }
-    // 抓一份加密前的 draft：失败时仍按这份原样展示。
-    const draftAtSave = draft;
     setLastError(null);
+    setSaveOverlay({ mode: "save", action: { kind: "none" } });
+    await performSave();
+  }
+
+  /**
+   * "保存并切换"遮罩里的"保存并切换"按钮：
+   *   校验后切换到 `save` 模式（按钮集合变为只"取消"），由 `performSave` 真正执行加密；
+   *   `action` 保留，保存成功后由 `completeSaveFlow` 派发。
+   */
+  async function handleSaveAndSwitch() {
+    if (!identity || !currentEditorState || !saveOverlay) return;
+    if (saveOverlay.mode !== "save-and-switch") return;
+    const state = currentEditorState;
+    if (state.decryptFailed) return; // 防御性：decryptFailed 走不到这里
+    if (state.loading) return; // 防御性：loading 时无法保存
+    const titleCheck = validateTitle(state.title);
+    if (!titleCheck.ok) {
+      setLastError(`保存失败：${titleCheck.failure.message}`);
+      setSaveOverlay(null);
+      return;
+    }
+    if (
+      isNoteTitleConflictWithEditor(
+        space.notes,
+        state.folderId,
+        titleCheck.title,
+        state.noteId,
+        state
+      )
+    ) {
+      setLastError(`保存失败：当前目录下已有同名 note "${titleCheck.title}"。`);
+      setSaveOverlay(null);
+      return;
+    }
+    setLastError(null);
+    // 切到 "save" 模式视觉（按钮集合只显示"取消"），action 保留。
+    setSaveOverlay({ mode: "save", action: saveOverlay.action });
+    await performSave();
+  }
+
+  /**
+   * 共享的加密 + 落地流程。
+   *   - 关闭遮罩永远在 finally 里完成。
+   *   - 失败时**不**回滚 currentEditorState，不清空选择。
+   *   - 成功时：
+   *       - 写 space.notes + localStorage；
+   *       - patch currentEditorState.baseline；
+   *       - 若是新建 note（kind: "new"）→ 升级为 "persisted"，id 不变；
+   *       - 若是已持久化 note → 更新 folderId/title/tags。
+   *   - `completeSaveFlow(action)` **仅在**加密成功**且**未被用户取消时派发。
+   */
+  async function performSave() {
+    if (!identity || !currentEditorState) return;
+    const state = currentEditorState;
+    const action = saveOverlay?.action ?? { kind: "none" };
+    const draftAtSave = state;
+    // 重置取消标志——本轮保存自己的"是否被取消"判定。
+    saveCancelledRef.current = false;
+    let didSucceed = false;
     try {
       const session = getSessionClient();
       const request = buildCipherEncryptRequest({
@@ -785,6 +1034,11 @@ export default function App() {
         requestId: makeRequestId()
       });
       const response = await session.runRequest(request);
+      // 收到结果后再检查一次：用户在等待期间点了"取消"。
+      if (saveCancelledRef.current) {
+        // 用户已主动取消：忽略 popup 的结果，**不**写盘。
+        return;
+      }
       if (!response.ok) {
         setLastError(formatProtocolError(response.error.code, response.error.message));
         return;
@@ -793,11 +1047,14 @@ export default function App() {
       const now = Date.now();
       const record: StoredNoteRecord = {
         v: 2,
-        id: existing?.id ?? cryptoRandomId(),
-        folderId: folderIdForCheck,
-        title: titleCheck.title,
+        id: draftAtSave.noteId,
+        folderId: draftAtSave.folderId,
+        title: draftAtSave.title.trim(),
         tags: normalizeTags(draftAtSave.tags),
-        createdAt: existing?.createdAt ?? now,
+        createdAt:
+          draftAtSave.kind === "persisted"
+            ? space.notes[draftAtSave.noteId]?.createdAt ?? now
+            : now,
         updatedAt: now,
         cipher: {
           contentType: NOTE_CONTENT_TYPE,
@@ -806,56 +1063,90 @@ export default function App() {
         }
       };
       const next = putNote(space, record);
-      // (1) 先同步解密缓存。
-      decryptedCacheRef.current = { noteId: record.id, markdown: draftAtSave.markdown };
-      // (2) 写入 space + 持久层。
+      // (1) 写持久层 + space；
       setSpace(next);
       saveOwnerSpace(identity.publicKeyHex, next);
-      // (3) 若是 pending note，从 in-memory pendingDrafts 移除。
-      //    顺序：先 setSpace 再 setPendingDrafts，避免 hydration effect 看到中间态。
-      if (isPending && noteId !== null) {
-        setPendingDrafts((prev) => {
-          const c = { ...prev };
-          delete c[noteId];
-          return c;
-        });
-      }
-      // (4) 原地 patch 当前 draft：
-      //    - id：pending → persisted 后变化；
-      //    - title / tags：保存后用最终值；
-      //    - markdown：保留刚保存的明文，**不**清空；
-      //    - selection / pendingDrafts 已经在上一步同步；本步**不**再触发重新打开链路。
-      setDraft({
-        noteId: record.id,
+      // (2) patch currentEditorState：
+      //     - kind: "new" → "persisted"；
+      //     - baseline = 当前值；
+      //     - 其余不变。
+      setCurrentEditorState({
+        ...draftAtSave,
+        kind: "persisted",
         title: record.title,
         tags: [...record.tags],
-        markdown: draftAtSave.markdown,
-        decryptFailed: false
+        baseline: {
+          title: record.title,
+          tags: [...record.tags],
+          markdown: draftAtSave.markdown
+        }
       });
+      didSucceed = true;
     } catch (err) {
-      // 失败：当前 draft 保持原样，不清空编辑器、不清空选择状态。
-      setLastError(formatTransportError(err));
+      // 用户主动取消时，closeSession 会让 in-flight 请求抛 popup_closed——
+      // 这时**不**当成错误显示，避免误导（"popup 被关闭"是因为我们自己关的）。
+      if (!saveCancelledRef.current) {
+        setLastError(formatTransportError(err));
+      }
+      // 失败 / 取消：currentEditorState 保持原样，不回滚。
+    } finally {
+      // 关闭遮罩。仅在"加密成功 + 未被取消"时才派发"保存后动作"。
+      setSaveOverlay(null);
+      if (didSucceed && !saveCancelledRef.current) {
+        completeSaveFlow(action);
+      }
     }
   }
 
+  /**
+   * 保存流程完成后的"派发"：
+   *   - `switch`：切换到目标；
+   *   - `create-note`：落地一个新 note；
+   *   - `none`：保持当前 note 不动。
+   */
+  function completeSaveFlow(action: AfterSaveAction) {
+    if (action.kind === "switch") {
+      applySelection(action.target);
+      return;
+    }
+    if (action.kind === "create-note") {
+      doCreateNote(action.parentId);
+      return;
+    }
+  }
+
+  /**
+   * 遮罩"取消"按钮：视为放弃当前保存尝试。
+   *
+   * 设计缘由（施工单 005 第 5.1.2 / 5.2.3 / 9.1 章）：
+   *   - 必须在 `performSave` 完成前告诉它"不要写盘、不要派发 action"——
+   *     否则 in-flight 请求回来后还是会执行切换 / 新建。
+   *   - 同时 best-effort 关掉 popup session：
+   *       - 让 in-flight 的 `runRequest` 走 `popup_closed` 失败路径，
+   *         `performSave` 的 catch 块据此不再设置 `lastError`；
+   *       - 下次再点 save 时 `getSessionClient` 会重建 session / 重开 popup。
+   *   - 当前编辑内容**不**丢（performSave 的失败路径不 patch state）。
+   *   - 留在当前 note；不切换。
+   */
+  function handleSaveOverlayCancel() {
+    saveCancelledRef.current = true;
+    // best-effort：关掉 session 让 in-flight 请求立刻被拒绝。
+    sessionRef.current?.closeSession();
+    sessionRef.current = null;
+    setPopupState("idle");
+    setSaveOverlay(null);
+  }
+
   function handleReset() {
-    if (!draft) return;
-    if (draft.noteId === null) {
-      setDraft(emptyDraft());
-      return;
-    }
-    const record = space.notes[draft.noteId] ?? pendingDrafts[draft.noteId];
-    if (!record) {
-      setDraft(emptyDraft());
-      return;
-    }
-    setDraft({
-      noteId: record.id,
-      title: record.title,
-      tags: [...record.tags],
-      markdown: decryptedCacheRef.current?.markdown ?? "",
+    if (!currentEditorState) return;
+    setCurrentEditorState({
+      ...currentEditorState,
+      title: currentEditorState.baseline.title,
+      tags: [...currentEditorState.baseline.tags],
+      markdown: currentEditorState.baseline.markdown,
       decryptFailed: false
     });
+    setDecryptError(null);
   }
 
   /* ============== 右键菜单触发 ============== */
@@ -863,7 +1154,6 @@ export default function App() {
   function handleFolderAction(action: FolderAction) {
     switch (action.type) {
       case "create-note":
-        // 直接传 parentIdOverride，避免 setSelection 异步回退。
         handleCreateNote(action.folderId);
         return;
       case "create-folder":
@@ -896,7 +1186,6 @@ export default function App() {
   }
 
   function handleRootAction(action: RootAction) {
-    // 右键根目录 → 新建在根目录下。parentIdOverride = null。
     if (action.type === "create-note") {
       handleCreateNote(null);
       return;
@@ -931,12 +1220,6 @@ export default function App() {
     setMoveState(null);
   }
 
-  /**
-   * 触发"重命名文件夹"：开页面内命名弹层；不再使用 `window.prompt`。
-   * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.6 / 6.9 章）：
-   *   - 同一页面不能并存"自定义命名弹层"与 `window.prompt`；
-   *   - 重命名时若重名阻断并提示，**不**自动补编号。
-   */
   function promptRenameFolder(folderId: string) {
     const target = getFolder(space, folderId);
     if (!target) return;
@@ -951,18 +1234,20 @@ export default function App() {
     setLastError(null);
   }
 
-  /**
-   * 触发"重命名 note"：开页面内命名弹层；不再使用 `window.prompt`。
-   * 初始值优先取持久化 record；若 note 是 pending draft（仅 in-memory），用 draft 的 title。
-   */
   function promptRenameNote(noteId: string) {
-    const target = getNote(space, noteId) ?? pendingDrafts[noteId];
-    if (!target) return;
+    let initial = "";
+    if (currentEditorState && currentEditorState.noteId === noteId) {
+      initial = currentEditorState.title;
+    } else {
+      const target = space.notes[noteId];
+      if (!target) return;
+      initial = target.title;
+    }
     setNameDialog({
       mode: { kind: "rename-note", noteId },
       title: "重命名 note",
       description: "输入新文件名（标题）。若与同目录下已有 note 重名，将阻断。",
-      initialValue: target.title,
+      initialValue: initial,
       placeholder: "文件名",
       confirmLabel: "确认"
     });
@@ -1024,28 +1309,51 @@ export default function App() {
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
-    // drafts 也算：用户在编辑中的 note 的 tag 也应参与聚合。
     for (const r of Object.values(space.notes)) {
       for (const t of r.tags) set.add(t.toLowerCase());
     }
-    for (const r of Object.values(pendingDrafts)) {
-      for (const t of r.tags) set.add(t.toLowerCase());
+    if (currentEditorState) {
+      for (const t of currentEditorState.tags) set.add(t.toLowerCase());
     }
     return [...set].sort();
-  }, [space.notes, pendingDrafts]);
+  }, [space.notes, currentEditorState]);
 
   /**
-   * 侧栏真正显示的"view space"：持久层 + in-memory pendingDrafts。
-   * drafts 永远不持久化——这里只是把它们"合并"到 UI 上，不进 localStorage。
+   * 侧栏真正显示的"view space"：
+   *   - 持久层 = `space`；
+   *   - 当前未保存新 note（`currentEditorState.kind === "new"`）以临时节点形式注入。
+   *
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4.3 / 7.3 章）：
+   *   - 临时节点 = "当前编辑临时节点"，**不**是 `pendingDrafts` record；
+   *   - 标题随时跟着 `currentEditorState.title` 走；
+   *   - 保存成功后无缝替换为 persisted note 节点。
    */
   const viewSpace = useMemo<StoredNotesSpace>(() => {
     const notes = { ...space.notes };
-    for (const [id, draft] of Object.entries(pendingDrafts)) {
-      // drafts 总是覆盖同名持久记录（不应该发生，作为兜底）。
-      notes[id] = draft;
+    if (
+      currentEditorState &&
+      currentEditorState.kind === "new" &&
+      !notes[currentEditorState.noteId]
+    ) {
+      // 临时 record 形态：与 sidebar 的 TreeNoteNode 解码逻辑一致（只要 id / title / folderId）。
+      const ephemeral: StoredNoteRecord = {
+        v: 2,
+        id: currentEditorState.noteId,
+        folderId: currentEditorState.folderId,
+        title: currentEditorState.title,
+        tags: [...currentEditorState.tags],
+        createdAt: 0,
+        updatedAt: 0,
+        cipher: {
+          contentType: NOTE_CONTENT_TYPE,
+          nonceBase64: "",
+          cipherbytesBase64: ""
+        }
+      };
+      notes[currentEditorState.noteId] = ephemeral;
     }
     return { v: 1, folders: space.folders, notes };
-  }, [space, pendingDrafts]);
+  }, [space, currentEditorState]);
 
   /**
    * 搜索 / tag 过滤后剩余的 note id 集合。
@@ -1073,43 +1381,69 @@ export default function App() {
     return null;
   }, [selection, space.folders]);
 
+  /**
+   * 给 NoteInspector 用的"record"视角：只有当前是已持久化 note 时才有 record；
+   * 新建 note 时为 null（"尚未保存"）。
+   */
   const currentNoteRecord: StoredNoteRecord | null = useMemo(() => {
-    if (selection.kind === "note" && selection.id !== null) {
-      return space.notes[selection.id] ?? pendingDrafts[selection.id] ?? null;
-    }
-    return null;
-  }, [selection, space.notes, pendingDrafts]);
+    if (!currentEditorState) return null;
+    if (currentEditorState.kind !== "persisted") return null;
+    return space.notes[currentEditorState.noteId] ?? null;
+  }, [currentEditorState, space.notes]);
 
+  /**
+   * dirty 判定：基于 `currentEditorState.baseline`。
+   *
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 6 章）：
+   *   - `kind: "new"` 一律 dirty（用户已表达"新建"意图，save 立即可点）；
+   *   - `decryptFailed` 一律 false（title / tags / markdown 均被锁）；
+   *   - 已持久化 note：与 baseline 比对 title / tags / markdown，任一不同即 dirty。
+   */
   const dirty = useMemo(
-    () =>
-      draft && selection.kind === "note" && selection.id !== null
-        ? draftHasChanges(space, pendingDrafts, selection.id, draft, decryptedCacheRef.current)
-        : false,
-    [space, pendingDrafts, draft, selection]
+    () => (currentEditorState ? isDirty(currentEditorState) : false),
+    [currentEditorState]
   );
 
+  /**
+   * 同步给 NoteEditor 的 markdown：在 decryptFailed 时强制空字符串以触发"无法解密"分支。
+   */
+  const editorMarkdown = useMemo(() => {
+    if (!currentEditorState) return "";
+    if (currentEditorState.decryptFailed) return "";
+    return currentEditorState.markdown;
+  }, [currentEditorState]);
+
   const titleError = useMemo(() => {
-    if (!draft) return null;
-    const check = validateTitle(draft.title);
+    if (!currentEditorState) return null;
+    const check = validateTitle(currentEditorState.title);
     return check.ok ? null : check.failure.message;
-  }, [draft]);
+  }, [currentEditorState]);
 
   const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
+
+  /**
+   * 给 NoteEditor 的 `editable` 标志。
+   * 边界：未登录 / decryptFailed / loading / 保存阻塞态 → 不可编辑。
+   */
+  const editorEditable =
+    !!identity &&
+    !!(
+      currentEditorState &&
+      !currentEditorState.decryptFailed &&
+      !currentEditorState.loading
+    );
+
+  /**
+   * 给侧栏 / 标题输入框用的"是否保存阻塞中"标志。
+   *   - saveOverlay 非空 → 整页进入阻塞态；
+   *   - title / markdown 都不应再接受输入。
+   */
+  const isBlockingSave = saveOverlay !== null;
 
   /* ============== 切换身份 / 删除当前数据 共用的退出清理 ============== */
 
   /**
    * 退出工作区 → 退回 LockScreen 时**统一**收口清空 notes 工作区内存态。
-   *
-   * 设计缘由（施工单 2026-06-26 delete-current-owner-space 第 7.2 节）：
-   *   - "切换身份"与"删除当前 owner 数据成功"两个动作的最后一段清理完全一致，
-   *     抽成共享函数避免代码分叉；
-   *   - identity 置空 / space 置空 / pendingDrafts 置空 / selection / draft /
-   *     右键菜单 / 拖拽 / move / 解密缓存 / pendingDialog / confirmDialog /
-   *     searchQuery / activeTag / lastError 全清；
-   *   - 同时关掉 popup session，防止旧 popup 持有 in-flight request 后
-   *     异步回流污染新工作区。
-   *   - **不**碰 localStorage——本函数只管内存态；是否删除数据由调用方决定。
    */
   function exitWorkspace() {
     sessionRef.current?.closeSession();
@@ -1117,10 +1451,10 @@ export default function App() {
     setPopupState("idle");
     setIdentity(null);
     setSpace({ v: 1, folders: {}, notes: {} });
-    setPendingDrafts({});
     setSelection({ kind: "root", id: null });
-    setDraft(null);
+    setCurrentEditorState(null);
     setDecryptError(null);
+    setSaveOverlay(null);
     setContextMenu(null);
     setDragging(null);
     setDropHover(null);
@@ -1128,7 +1462,9 @@ export default function App() {
     setPendingDialog(null);
     setConfirmDialog(null);
     setNameDialog(null);
-    decryptedCacheRef.current = null;
+    saveCancelledRef.current = false;
+    openOperationRef.current = 0;
+    openChainRef.current = Promise.resolve();
     setLastError(null);
     setSearchQuery("");
     setActiveTag(null);
@@ -1136,9 +1472,6 @@ export default function App() {
 
   /**
    * 切换身份 / 更换登录器：只退回登录壳，**不**删本地数据。
-   *
-   * 设计缘由（施工单 2026-06-26 lock-screen-custom-provider）：旧身份数据保留
-   * 在 localStorage，再次登录同一 owner 时仍可见。
    */
   function handleSwitchIdentity() {
     exitWorkspace();
@@ -1146,18 +1479,6 @@ export default function App() {
 
   /* ============== 删除当前 owner 本地数据 ============== */
 
-  /**
-   * 删除当前 owner 的整个本地 notes 空间，然后退回 LockScreen。
-   *
-   * 设计缘由（施工单 2026-06-26 delete-current-owner-space）：
-   *   - 唯一入口 = 已登录态页头；未登录态不放入口。
-   *   - 删除前必须二次确认；一个确认框吃掉所有风险提示（含未保存 draft）。
-   *   - 删除顺序硬约束（5.4 节）：先调持久层删除 → 只有返回成功才执行内存清理
-   *     与退回 LockScreen；失败时不能假装成功、不能退回登录壳。
-   *   - 删除对象 = `removeStorage(storageKeyForOwner(publicKeyHex))`；
-   *     不递归遍历 note / folder，避免引入部分成功态。
-   *   - 失败时仅展示错误文案，不动工作区，让用户可以重试。
-   */
   function handleDeleteCurrentOwnerData() {
     if (!identity || isLoggingIn) return;
     const ownerHex = identity.publicKeyHex;
@@ -1171,9 +1492,7 @@ export default function App() {
       cancelLabel: "取消",
       onCancel: () => setConfirmDialog(null),
       onConfirm: () => {
-        // 二次确认框先关掉，避免清空状态后旧弹窗挂在 React 树里。
         setConfirmDialog(null);
-        // 删除失败时不能假装成功：先调持久层，失败仅展示错误，不清工作区。
         const ok = deleteOwnerSpace(ownerHex);
         if (!ok) {
           setLastError("删除当前本地数据失败，请重试。");
@@ -1228,6 +1547,11 @@ export default function App() {
         <NotesSidebar
           space={viewSpace}
           visibleNoteIds={visibleNoteIds}
+          ephemeralNoteId={
+            currentEditorState && currentEditorState.kind === "new"
+              ? currentEditorState.noteId
+              : null
+          }
           selection={selection}
           searchQuery={searchQuery}
           activeTag={activeTag}
@@ -1238,8 +1562,8 @@ export default function App() {
           ownerLabel={ownerLabel}
           disabled={isLoggingIn}
           onSelect={trySelect}
-          onCreateNote={handleCreateNote}
-          onCreateFolder={handleCreateFolder}
+          onCreateNote={() => handleCreateNote()}
+          onCreateFolder={() => handleCreateFolder()}
           onFolderAction={handleFolderAction}
           onNoteAction={handleNoteAction}
           onRootAction={handleRootAction}
@@ -1256,25 +1580,44 @@ export default function App() {
         />
 
         <section className="editor-stage">
-          {draft ? (
+          {currentEditorState ? (
             <>
               <div className="editor-stage__header">
                 <input
                   type="text"
                   className="editor-stage__filename"
-                  value={draft.title}
-                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                  value={currentEditorState.title}
+                  onChange={(e) =>
+                    setCurrentEditorState((prev) =>
+                      prev ? { ...prev, title: e.target.value } : prev
+                    )
+                  }
                   placeholder="未命名 note"
-                  disabled={!!draft.decryptFailed}
+                  disabled={
+                    !!currentEditorState.decryptFailed ||
+                    currentEditorState.loading ||
+                    isBlockingSave
+                  }
                   spellCheck={false}
                 />
-                <span className="editor-stage__filename-hint">文件名（保存时会写入 note record）</span>
+                <span className="editor-stage__filename-hint">
+                  {currentEditorState.kind === "new"
+                    ? "新建 note（尚未保存）"
+                    : currentEditorState.loading
+                      ? "正在从 Keymaster 解密正文…"
+                      : "文件名（保存时会写入 note record）"}
+                </span>
               </div>
               <NoteEditor
-                markdown={draft.markdown}
-                editable={!!identity && !draft.decryptFailed}
-                decryptFailed={draft.decryptFailed}
-                onChange={(md) => setDraft((prev) => (prev ? { ...prev, markdown: md } : prev))}
+                key={currentEditorState.noteId}
+                markdown={editorMarkdown}
+                editable={editorEditable && !isBlockingSave}
+                decryptFailed={currentEditorState.decryptFailed}
+                onChange={(md) =>
+                  setCurrentEditorState((prev) =>
+                    prev ? { ...prev, markdown: md } : prev
+                  )
+                }
               />
               {decryptError ? (
                 <p className="editor-stage__error">解密失败：{decryptError}</p>
@@ -1290,19 +1633,30 @@ export default function App() {
           )}
         </section>
 
-        {draft ? (
+        {currentEditorState ? (
           <NoteInspector
-            draft={draft}
+            draft={editorStateToDraft(currentEditorState)}
             record={currentNoteRecord}
             isDirty={dirty}
+            isSaving={isBlockingSave}
             titleError={titleError}
-            canEdit={!!identity && !isLoggingIn && !draft.decryptFailed}
-            canDelete={!!identity && !isLoggingIn}
-            decryptFailed={draft.decryptFailed}
-            onChangeTitle={(t) => setDraft((prev) => (prev ? { ...prev, title: t } : prev))}
-            onChangeTags={(tags) => setDraft((prev) => (prev ? { ...prev, tags } : prev))}
+            canEdit={
+              !!identity &&
+              !isLoggingIn &&
+              !currentEditorState.decryptFailed &&
+              !currentEditorState.loading &&
+              !isBlockingSave
+            }
+            canDelete={!!identity && !isLoggingIn && !isBlockingSave}
+            decryptFailed={currentEditorState.decryptFailed}
+            onChangeTitle={(t) =>
+              setCurrentEditorState((prev) => (prev ? { ...prev, title: t } : prev))
+            }
+            onChangeTags={(tags) =>
+              setCurrentEditorState((prev) => (prev ? { ...prev, tags } : prev))
+            }
             onSave={() => void handleSave()}
-            onDelete={() => draft.noteId && handleDeleteNote(draft.noteId)}
+            onDelete={() => handleDeleteNote(currentEditorState!.noteId)}
             onReset={handleReset}
           />
         ) : currentFolder ? (
@@ -1311,6 +1665,7 @@ export default function App() {
             record={null}
             folder={currentFolder}
             isDirty={false}
+            isSaving={false}
             titleError={null}
             canEdit={!!identity && !isLoggingIn}
             canDelete={!!identity && !isLoggingIn}
@@ -1367,11 +1722,30 @@ export default function App() {
           onCancel={handleNameDialogCancel}
         />
       ) : null}
+
+      {saveOverlay ? (
+        <SaveOverlayDialog
+          mode={saveOverlay.mode}
+          onCancel={handleSaveOverlayCancel}
+          onSaveAndSwitch={() => void handleSaveAndSwitch()}
+        />
+      ) : null}
     </div>
   );
 }
 
 /* ============== 工具 ============== */
+
+/** 把 `CurrentEditorState` 投影成 `NoteDraft`，喂给 NoteInspector / TagInput 等。 */
+function editorStateToDraft(state: CurrentEditorState): NoteDraft {
+  return {
+    noteId: state.noteId,
+    title: state.title,
+    tags: [...state.tags],
+    markdown: state.markdown,
+    decryptFailed: state.decryptFailed
+  };
+}
 
 function makeRequestId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -1393,44 +1767,23 @@ function truncate(value: string, head: number): string {
 }
 
 /**
- * dirty 判定：区分"已持久化 note"与"pending note"两种基线。
+ * dirty 判定：基于 `currentEditorState.baseline`。
  *
- * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.2 / 5.2 章）：
- *   - 已持久化 note：markdown 基线来自解密缓存 `cached.markdown`；
- *   - pending note（首次保存前）：markdown 基线 = 空字符串，
- *     不能因为没有 persisted cipher 就把 markdown 变化忽略掉。
- *     这是修复"新建 note 只改 markdown 时 save 按钮不亮"的关键。
- *   - 整体判断**不**依赖 tag 是否为空；tag 可空。
- *   - pendingDrafts **不**持久化明文 markdown；不在这里读 pending 做 markdown 比对。
+ * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 6 章 +
+ *          后续修复："解密中..." 占位态不能被算成 dirty）：
+ *   - `loading` 一律 false（markdown 是占位符，title / tags / 编辑区均被锁，
+ *     "正在加载"≠"用户有未保存修改"）；
+ *   - `decryptFailed` 一律 false（编辑入口全锁）；
+ *   - `kind: "new"` 一律 true（用户已表达"新建"意图，save 立即可点）；
+ *   - 已持久化 note：与 baseline 比对 title / tags / markdown，任一不同即 dirty。
  */
-function draftHasChanges(
-  space: StoredNotesSpace,
-  pending: Record<string, StoredNoteRecord>,
-  noteId: string | null,
-  draft: NoteDraft,
-  cached: DecryptedCache | null
-): boolean {
-  if (draft.decryptFailed) return false;
-  if (noteId === null) {
-    return draft.title.length > 0 || draft.tags.length > 0 || draft.markdown.length > 0;
-  }
-  const persisted = space.notes[noteId];
-  const isPending = persisted === undefined;
-  if (!persisted && !pending[noteId]) return true;
-  // 共有：title / tags 跟 record 比对（pending record / persisted record 都行）。
-  const record = persisted ?? pending[noteId]!;
-  if (draft.title !== record.title) return true;
-  if (draft.tags.join(",") !== record.tags.join(",")) return true;
-  // markdown 基线按 isPending 区分。
-  if (isPending) {
-    // pending note 尚未保存过：markdown 基线 = 空字符串。
-    return draft.markdown.length > 0;
-  }
-  // 已持久化：基线来自解密缓存（与该 noteId 一致时）。
-  if (cached && cached.noteId === noteId) {
-    return cached.markdown !== draft.markdown;
-  }
-  // 没缓存：保守起见视为未变化（hydration 进行中）。
+function isDirty(state: CurrentEditorState): boolean {
+  if (state.loading) return false;
+  if (state.decryptFailed) return false;
+  if (state.kind === "new") return true;
+  if (state.title !== state.baseline.title) return true;
+  if (state.tags.join(",") !== state.baseline.tags.join(",")) return true;
+  if (state.markdown !== state.baseline.markdown) return true;
   return false;
 }
 
@@ -1464,15 +1817,14 @@ function formatTransportError(error: unknown): string {
 }
 
 /**
- * 把持久层 notes 与 in-memory pendingDrafts 合并后再做"同目录重名"判断。
- * 用途：drag / 右键菜单新建 / 右键菜单移动 / 保存重命名 等所有可能跨越两层来源的动作。
+ * 把持久层 notes 与当前 editor state（可能未持久化）合并后再做"同目录重名"判断。
  */
-function isNoteTitleConflictMerged(
+function isNoteTitleConflictWithEditor(
   persisted: Record<string, StoredNoteRecord>,
-  pending: Record<string, StoredNoteRecord>,
   folderId: string | null,
   title: string,
-  excludeNoteId: string | null
+  excludeNoteId: string | null,
+  editorState: CurrentEditorState | null
 ): boolean {
   const trimmed = title.trim();
   for (const n of Object.values(persisted)) {
@@ -1480,10 +1832,13 @@ function isNoteTitleConflictMerged(
     if (n.folderId !== folderId) continue;
     if (n.title.trim() === trimmed) return true;
   }
-  for (const n of Object.values(pending)) {
-    if (excludeNoteId !== null && n.id === excludeNoteId) continue;
-    if (n.folderId !== folderId) continue;
-    if (n.title.trim() === trimmed) return true;
+  if (
+    editorState &&
+    editorState.noteId !== excludeNoteId &&
+    editorState.folderId === folderId &&
+    editorState.title.trim() === trimmed
+  ) {
+    return true;
   }
   return false;
 }

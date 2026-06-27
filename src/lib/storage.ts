@@ -1,12 +1,15 @@
 // src/lib/storage.ts
 // 本地 KV 存储 + folder/note 容器 + 增删改查 + 同目录重名 / 移动合法性 / 空间为空判定。
 //
-// 设计缘由（施工单第 4 / 9 章）：
+// 设计缘由（施工单第 4 / 9 章 + 2026-06-26 save-switch-current-editor-state）：
 //   - 容器按 ownerPublicKeyHex 分区；存储 key `notes-demo:owner:{publicKeyHex}`。
 //   - 容器形态：`{ folders: Record<id, StoredFolderRecord>, notes: Record<id, StoredNoteRecord> }`。
 //   - owner 信息**不**写进 record 本身；外层 key 已经隔离。
 //   - 这一层**不**持有 markdown 明文缓存；只持有密文 + 明文元数据。
 //   - 所有"是不是合法 / 是不是冲突 / 是不是空"的判断都收口在这里；上层 App 不重复实现。
+//   - **不**再为未保存 note 提供任何"半持久化容器"——
+//     未保存 note 只活在 App 的内存态 `currentEditorState`（`kind: "new"`）里；
+//     第一次成功加密保存后才通过 `putNote` 进入 space / localStorage。
 
 import type { StoredFolderRecord, StoredNoteRecord } from "./notes";
 import { isStoredFolderRecord, isStoredNoteRecord } from "./notes";
@@ -171,8 +174,8 @@ export function moveFolder(
  * 直接以完整 record 写入 / 替换一条 note。用于"保存时加密完成"的更新。
  *
  * 设计缘由（硬切换硬约束）：这里**不**提供"先写空密文占位 record"的入口。
- * 新建 note 只能走 App 层的 `pendingDrafts`（纯内存），第一次成功加密保存
- * 之后才调用 `putNote` 进入 space / localStorage。
+ * 新建 note 只活在 App 的内存态 `currentEditorState`（`kind: "new"`）里，
+ * 第一次成功加密保存之后才调用 `putNote` 进入 space / localStorage。
  * —— 任何"先占位、后补密文"的实现都会重新违背"密文是真值"边界。
  */
 export function putNote(space: StoredNotesSpace, note: StoredNoteRecord): StoredNotesSpace {
@@ -307,9 +310,11 @@ export function findNoteIdsByTag(notes: Record<string, StoredNoteRecord>, tag: s
  *   - 比较时 `trim` 后精确相等（不区分大小写，不归一化），
  *     占用集合由调用方传入，不在这一层做持久层 / 内存态合并判断。
  *
- * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.4 / 4.5 / 6.10 章）：
+ * 设计缘由（施工单 2026-06-26 save-tag-folder-ux 第 4.4 / 4.5 / 6.10 章 +
+ *          2026-06-26 save-switch-current-editor-state）：
  *   - 自动补编号只用于"创建"，**不**用于"重命名"——重命名调用方必须自己做冲突阻断。
- *   - 这一层不读持久层，由 App 合并 `space.notes + pendingDrafts` 后再传入。
+ *   - 这一层不读持久层；调用方（App）把"持久层 note titles"和"当前未保存新 note 的
+ *     title"合并后再传入。
  */
 export function findAvailableName(base: string, takenTitles: Iterable<string>): string {
   const trimmed = base.trim();

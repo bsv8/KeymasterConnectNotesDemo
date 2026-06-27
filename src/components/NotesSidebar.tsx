@@ -1,12 +1,14 @@
 // src/components/NotesSidebar.tsx
 // 左侧 folder/note 混合树 + 选中 + 右键菜单 + 拖拽。
 //
-// 设计缘由（施工单第 8-10 章）：
+// 设计缘由（施工单第 8-10 章 + 2026-06-26 save-switch-current-editor-state）：
 //   - 树结构**完全由 `buildTree(folders, notes)` 派生**；组件不做二次假设。
 //   - folder / note 节点都是显式实体，**不**是"path 字符串"。
 //   - 右键菜单：folder 显示"新建笔记 / 新建文件夹 / 重命名 / 删除"；note 显示"重命名 / 删除"。
 //   - 拖拽：folder/note 都可拖到 folder 或根目录上；语义统一为"move"。
 //   - App 持有所有 mutation 真值；组件只触发 `onFolderAction / onNoteAction` 等回调。
+//   - "当前未保存新 note"通过 `ephemeralNoteId` 注入；选中态跟 `selection` 走；
+//     视觉上打 `is-ephemeral` 标记，区别于已落库 note。
 
 import { useEffect, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { buildTree, type TreeFolderNode, type TreeNoteNode, type TreeRootNode } from "../lib/path";
@@ -71,6 +73,8 @@ export interface NotesSidebarProps {
   space: StoredNotesSpace;
   /** 搜索 / tag 过滤后剩余的 note id 集合；null 表示"不过滤"。 */
   visibleNoteIds: Set<string> | null;
+  /** 当前未保存新 note 的 id（如果有）；用于在树上打"临时"标记。 */
+  ephemeralNoteId?: string | null;
   selection: SidebarSelection;
   searchQuery: string;
   activeTag: string | null;
@@ -271,6 +275,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
                     disabled={props.disabled ?? false}
                     moveState={props.moveState}
                     isNoteVisible={isNoteVisible}
+                    ephemeralNoteId={props.ephemeralNoteId ?? null}
                     onSelect={props.onSelect}
                     onFolderAction={props.onFolderAction}
                     onNoteAction={props.onNoteAction}
@@ -291,6 +296,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
                       node={n}
                       depth={1}
                       selected={isSelectedNote(n.id)}
+                      ephemeral={props.ephemeralNoteId === n.id}
                       dragging={props.dragging}
                       disabled={props.disabled ?? false}
                       onSelect={() => props.onSelect({ kind: "note", id: n.id })}
@@ -346,6 +352,7 @@ interface FolderNodeProps {
   disabled: boolean;
   moveState: MoveState | null;
   isNoteVisible: (id: string) => boolean;
+  ephemeralNoteId: string | null;
   onSelect: (next: SidebarSelection) => void;
   onFolderAction: (action: FolderAction) => void;
   onNoteAction: (action: NoteAction) => void;
@@ -430,6 +437,7 @@ function FolderNode(props: FolderNodeProps) {
           disabled={props.disabled}
           moveState={props.moveState}
           isNoteVisible={props.isNoteVisible}
+          ephemeralNoteId={props.ephemeralNoteId}
           onSelect={props.onSelect}
           onFolderAction={props.onFolderAction}
           onNoteAction={props.onNoteAction}
@@ -447,6 +455,7 @@ function FolderNode(props: FolderNodeProps) {
           node={child}
           depth={props.depth + 1}
           selected={props.selectedNote(child.id)}
+          ephemeral={props.ephemeralNoteId === child.id}
           dragging={props.dragging}
           disabled={props.disabled}
           onSelect={() => props.onSelect({ kind: "note", id: child.id })}
@@ -464,6 +473,8 @@ interface NoteRowProps {
   node: TreeNoteNode;
   depth: number;
   selected: boolean;
+  /** 当前未保存新 note：视觉上区分；不可拖走（保存前无 folder 实体）。 */
+  ephemeral?: boolean;
   dragging: DragState | null;
   disabled: boolean;
   onSelect: () => void;
@@ -489,13 +500,18 @@ function NoteRow(props: NoteRowProps) {
         "tree-item",
         "is-note",
         props.selected ? "is-selected" : "",
-        isDragging ? "is-dragging" : ""
+        isDragging ? "is-dragging" : "",
+        props.ephemeral ? "is-ephemeral" : ""
       ]
         .filter(Boolean)
         .join(" ")}
       style={{ paddingLeft: `${8 + props.depth * 14}px` }}
-      draggable
+      draggable={!props.ephemeral}
       onDragStart={(e) => {
+        if (props.ephemeral) {
+          e.preventDefault();
+          return;
+        }
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", `note:${node.id}`);
         props.onDragStart("note", node.id);
@@ -503,12 +519,17 @@ function NoteRow(props: NoteRowProps) {
       onDragEnd={() => props.onDragEnd()}
       onClick={props.onSelect}
       onContextMenu={handleContextMenu}
-      title={node.title}
+      title={props.ephemeral ? `${node.title || "未命名 note"}（未保存）` : node.title}
     >
       <span className="tree-item__icon" aria-hidden="true">
         ·
       </span>
       <span className="tree-item__label">{node.title || "未命名 note"}</span>
+      {props.ephemeral ? (
+        <span className="tree-item__badge" aria-hidden="true">
+          未保存
+        </span>
+      ) : null}
     </button>
   );
 }

@@ -1,7 +1,8 @@
 // src/components/NoteInspector.tsx
 // 右侧 note / folder 元数据面板。
 //
-// 设计缘由（施工单第 12.7 节 + 2026-06-26 save-tag-folder-ux）：
+// 设计缘由（施工单第 12.7 节 + 2026-06-26 save-tag-folder-ux +
+//          2026-06-26 save-switch-current-editor-state）：
 //   - **不再**包含 title 编辑——title（文件名）已经在 editor-stage 顶部输入框承担。
 //   - **不再**包含 path 编辑——folder/note 通过右键菜单 / 拖拽移动，路径是派生量。
 //   - 仅保留：
@@ -13,6 +14,8 @@
 //   - `decryptFailed` 时所有编辑入口禁用；删除仍然允许——这是修复"请删除本条"提示的关键。
 //   - tag 控件自身的规范化继续走 `notes.ts`（trim / 小写 / 去重 / 截断）；控件不重复规则。
 //   - save 按钮亮灭规则：tag **不**是必填项；是否可点只取决于 title 合法 + dirty。
+//   - `isSaving` 为 true 时（App 处于 saveOverlay 阻塞态）：save / 删除 / 放弃修改
+//     全部禁用——避免在 popup 等待期间误触破坏 currentEditorState。
 
 import { useMemo } from "react";
 import type { NoteDraft, StoredFolderRecord, StoredNoteRecord } from "../lib/notes";
@@ -28,6 +31,8 @@ export interface NoteInspectorProps {
   folder?: StoredFolderRecord | null;
   /** 是否有未保存修改（draft 模式才有意义）。 */
   isDirty: boolean;
+  /** App 是否处于保存阻塞态（saveOverlay 非空）。 */
+  isSaving: boolean;
   /** title 校验失败的提示文案；null 表示合法。 */
   titleError: string | null;
   /** 是否允许编辑元数据（tags）；decryptFailed 时为 false。 */
@@ -93,10 +98,10 @@ export function NoteInspector(props: NoteInspectorProps) {
   if (!props.draft) return null;
 
   const titleCheck = useMemo(() => validateTitle(props.draft!.title), [props.draft]);
-  // save 亮灭：title 合法 + 非 decryptFailed + 有修改；
+  // save 亮灭：title 合法 + 非 decryptFailed + 有修改 + 当前不在保存阻塞态；
   // tag 长度在这里**不**参与判定——tag 为空也应允许保存。
   const canSave =
-    !props.decryptFailed && props.canEdit && titleCheck.ok && props.isDirty;
+    !props.decryptFailed && !props.isSaving && props.canEdit && titleCheck.ok && props.isDirty;
 
   return (
     <aside className="inspector">
@@ -158,7 +163,13 @@ export function NoteInspector(props: NoteInspectorProps) {
           className="primary-button"
           onClick={props.onSave}
           disabled={!canSave}
-          title={props.decryptFailed ? "解密失败，禁止覆盖密文" : undefined}
+          title={
+            props.isSaving
+              ? "正在等待 Keymaster 许可"
+              : props.decryptFailed
+                ? "解密失败，禁止覆盖密文"
+                : undefined
+          }
         >
           加密保存
         </button>
@@ -168,6 +179,7 @@ export function NoteInspector(props: NoteInspectorProps) {
             className="secondary-button inspector-danger"
             onClick={props.onDelete}
             disabled={!props.canDelete}
+            title={props.isSaving ? "正在等待 Keymaster 许可" : undefined}
           >
             删除
           </button>
@@ -177,7 +189,7 @@ export function NoteInspector(props: NoteInspectorProps) {
             type="button"
             className="secondary-button"
             onClick={props.onReset}
-            disabled={!props.canEdit}
+            disabled={!props.canEdit || props.isSaving}
           >
             放弃修改
           </button>

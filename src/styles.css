@@ -1,7 +1,8 @@
 /* src/styles.css
  * Notion 风格工作区样式 + LockScreen 锁屏样式。
  *
- * 设计缘由（施工单 4.1 + 2026-06-26 lock-screen-custom-provider 第 9.7 节）：
+ * 设计缘由（施工单 4.1 + 2026-06-26 lock-screen-custom-provider 第 9.7 节 +
+ *          2026-06-26 save-switch-current-editor-state）：
  *   - 低对比背景；
  *   - 极细分隔；
  *   - 大量留白；
@@ -12,6 +13,9 @@
  * 顶部 header 收 connect status + login。
  *
  * 锁屏（未登录态）：单独一页 lock 页面，不与工作区结构混在一起。
+ *
+ * 保存阻塞遮罩（save-overlay）：整页半透明遮罩 + 中央提示框，强制等 Keymaster 许可。
+ * 临时 note（is-ephemeral）：在侧栏树上以"未保存"徽章标记，区别于已落库 note。
  */
 
 :root {
@@ -498,6 +502,41 @@ code {
 
 .tree-item.is-dragging {
   opacity: 0.4;
+}
+
+/*
+ * "当前未保存新 note" 临时节点：
+ *   - 视觉上轻微淡化（opacity 0.85），保持可读；
+ *   - 右侧显示"未保存"徽章，与已落库 note 区分；
+ *   - 仍可点击进入编辑；不可拖走（保存前无 folder / parent 概念）。
+ */
+.tree-item.is-ephemeral {
+  opacity: 0.85;
+  font-style: italic;
+}
+
+.tree-item.is-ephemeral.is-selected {
+  opacity: 1;
+}
+
+.tree-item__badge {
+  margin-left: auto;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+
+.tree-item.is-ephemeral.is-selected .tree-item__badge {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: rgba(35, 131, 226, 0.25);
 }
 
 .tree-root-label {
@@ -999,6 +1038,77 @@ code {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* ============== save overlay (页面级阻塞遮罩) ============== */
+
+/*
+ * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.3 章）：
+ *   - 整页半透明遮罩（z-index 高于所有工作区），不可点击背后；
+ *   - 中央提示框，附带 spinner；按钮集合随 mode 区分。
+ *   - Esc 故意不取消（与 NameInputDialog 不同）：用户已进入协议流程，
+ *     关闭遮罩不会取消已飞的请求，反而让 UI 跟协议分裂。
+ */
+.save-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+
+.save-overlay__box {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  padding: 24px 28px;
+  width: min(440px, calc(100% - 32px));
+  box-shadow: 0 12px 36px rgba(15, 15, 15, 0.18);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.save-overlay__spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: save-overlay-spin 0.8s linear infinite;
+  margin-bottom: 4px;
+}
+
+@keyframes save-overlay-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.save-overlay__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.save-overlay__description {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--color-text-soft);
+}
+
+.save-overlay__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+  width: 100%;
 }
 
 /* ============== name dialog (新建文件夹 / 重命名) ============== */

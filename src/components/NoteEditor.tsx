@@ -1,7 +1,7 @@
 // src/components/NoteEditor.tsx
 // BlockNote 编辑器包装。
 //
-// 设计缘由（施工单第 7 章 + 12.6 节）：
+// 设计缘由（施工单第 7 章 + 12.6 节 + 2026-06-26 save-switch-current-editor-state）：
 //   - BlockNote 内存态是**编辑**真值；导出 markdown 才是**落库**真值。
 //   - 我们不在持久层存 BlockNote JSON；只存加密的 markdown。
 //   - 外部 `value` (markdown) ↔ 内部 BlockNote document 的转换在编辑器内部完成；
@@ -10,6 +10,10 @@
 //     code / divider）；高级块（image / table / 多列）不引入。
 //   - **不再承载 title 语义**——标题（文件名）改由 editor-stage__filename 输入框收口。
 //   - "保存"动作由父组件在 markdown 稳定后触发；编辑器不做自动保存。
+//   - 防回灌：使用 `lastLoadedRef` 记录"我最近一次灌入编辑器的 markdown"，
+//     外部 `props.markdown` 若与它一致则跳过 loadMarkdown。
+//     这避免"save 成功后 App 重新传入相同 markdown → 触发 reload → 编辑器抖动"链路。
+//     上抛的 onChange 也会先把 `md` 写入 `lastLoadedRef`，让"自己刚上抛的"不会再被自己 reload。
 
 import { useEffect, useMemo, useRef } from "react";
 import { BlockNoteView } from "@blocknote/mantine";
