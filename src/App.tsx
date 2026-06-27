@@ -5,7 +5,9 @@
 //          施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
 //          第 4-10 章 +
 //          施工单 2026-06-27 notion-document-toolbar-and-mobile-sidebar
-//          第 3 / 4 / 5 / 6 章）：
+//          第 3 / 4 / 5 / 6 章 +
+//          施工单 2026-06-27 note-search-results-and-tree-expand-persistence
+//          第 4-11 章）：
 //   - 顶层固定二态：`identity === null` 时只渲染 `LockScreen`；已登录才渲染工作区。
 //   - **当前编辑内存态单真值**：整页只允许存在一份"当前正在编辑的内存态"
 //     `currentEditorState`。它同时承担：
@@ -48,7 +50,22 @@
 //       - sidebar 内不再保留移动模式横条（搬至 banner）；
 //       - 选中 folder 时 sidebar 根目录上方显示简化 folder 工具条；
 //       - 窄屏下文件树支持手工展开 / 收起；选中 root / folder / note 后自动收起。
-//       - 业务状态机、保存 / 切换 / 解密拦截等不变。
+//   - **搜索 / tag 过滤 / 文件树开合的硬切换**（施工单 2026-06-27）：
+//       - sidebar **不再**用 `searchQuery` / `activeTag` 过滤——树永远展示真实完整树。
+//       - 搜索 / tag 过滤**只**驱动右侧"搜索结果页"（SearchResultsPanel）；
+//       - `isSearchMode = searchQuery.trim() !== "" || activeTag !== null` 时，
+//         文档区切到搜索结果页；否则回到现有 note / folder / root 视图。
+//       - 搜索结果只包含 note（不含 folder），按树自然顺序排列。
+//       - 结果项固定两行：标题（大字）+ path（小字）。
+//       - 文件树 folder **真实可开合**：`expandedFolderIds: Set<string>` 由 App
+//         持有单真值，sidebar 只接收 + 回调开合。
+//       - folder 行点击 = 只选中；folder 前开合按钮 = 只展开/折叠。
+//       - `expandedFolderIds` **按 owner 分区持久化**到 localStorage
+//         （`notes-demo:sidebar:{publicKeyHex}`），不写进 `StoredNotesSpace`。
+//       - 加载时：缺失/非法值 → 默认全部展开；已不存在的 folderId 静默丢弃。
+//       - 点击搜索结果后：走 `trySelect`；切换**成功**后再把"祖先路径"
+//         写进 `expandedFolderIds`。
+//       - folder 删除 / 重命名 / 移动时：根据 id 是否还在 tree 里清理无效 id。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -89,7 +106,14 @@ import {
   saveOwnerSpace,
   type StoredNotesSpace
 } from "./lib/storage";
-import { checkDragLegality, describeDragLegalityReason } from "./lib/path";
+import {
+  ancestorFolderIds,
+  buildTree,
+  checkDragLegality,
+  collectNotesInTreeOrder,
+  describeDragLegalityReason,
+  folderPathLabel
+} from "./lib/path";
 import {
   applyResolvedAppTheme,
   getSystemThemeMediaQuery,
@@ -98,6 +122,10 @@ import {
   saveAppThemePreference,
   type AppThemePreference
 } from "./lib/theme";
+import {
+  loadOwnerSidebarState,
+  saveOwnerSidebarState
+} from "./lib/sidebarState";
 import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
 import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState, type SidebarSelection } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
@@ -105,6 +133,7 @@ import { DocumentToolbar } from "./components/DocumentToolbar";
 import { LockScreen } from "./components/LockScreen";
 import { NameInputDialog } from "./components/NameInputDialog";
 import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
+import { SearchResultsPanel, buildSearchResults } from "./components/SearchResultsPanel";
 
 /** 新建 note / folder 的默认基名（自动补编号时按 "基名 N" 递增）。 */
 const DEFAULT_NOTE_BASE_NAME = "新 note";
@@ -296,6 +325,18 @@ export default function App() {
     | null
   >(null);
   const [moveState, setMoveState] = useState<MoveState | null>(null);
+  /**
+   * folder 展开状态：单真值。**不**写进 `StoredNotesSpace`（那是业务真值）；
+   * 持久化走 `sidebarState.ts`（按 owner 分区）。
+   *
+   * 设计缘由（施工单 2026-06-27 第 4.6 / 4.7 章）：
+   *   - folder / note 手动开合只改这份；
+   *   - 点击搜索结果后自动展开祖先路径也只改这份；
+   *   - **不**再维护并行的"临时 auto expanded"状态。
+   */
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(
+    () => new Set<string>()
+  );
   /** 页面内命名弹层：null = 不显示。 */
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
 
@@ -468,6 +509,7 @@ export default function App() {
       // 重置代际 / pending 引用：旧 owner 留下的链上 promise 全部过期。
       openOperationRef.current = 0;
       pendingDecryptRef.current = null;
+      setExpandedFolderIds(new Set());
       return;
     }
     const loaded = loadOwnerSpace(identity.publicKeyHex);
@@ -478,7 +520,55 @@ export default function App() {
     saveCancelledRef.current = false;
     openOperationRef.current = 0;
     pendingDecryptRef.current = null;
+    // 加载当前 owner 的 sidebar 展开状态：
+    //   - 无记录 / 非法 → 全部展开（默认行为，匹配"硬切换前"用户感知）；
+    //   - 有记录 → 与当前 folders 取交集，静默丢弃已不存在的 id。
+    const persistedExpanded = loadOwnerSidebarState(identity.publicKeyHex);
+    if (persistedExpanded === null) {
+      // 首次进入：默认所有 folder 展开。
+      setExpandedFolderIds(new Set(Object.keys(loaded.folders)));
+    } else {
+      const valid = persistedExpanded.filter((id) => Boolean(loaded.folders[id]));
+      setExpandedFolderIds(new Set(valid));
+    }
   }, [identity?.publicKeyHex]);
+
+  /**
+   * `expandedFolderIds` 变化后**仅在已登录**时写回 localStorage。
+   * 设计缘由（施工单 2026-06-27 第 4.7 / 5.5 章）：
+   *   - 已不存在的 folderId 在加载时已过滤；这里**也**在 `space.folders`
+   *     变化时清理（见下方 effect）。
+   *   - 退出工作区时 identity 变 null，effect 不会再触发写回，避免脏写。
+   */
+  useEffect(() => {
+    if (!identity) return;
+    saveOwnerSidebarState(identity.publicKeyHex, [...expandedFolderIds]);
+  }, [expandedFolderIds, identity?.publicKeyHex]);
+
+  /**
+   * `space.folders` 变化（删除 / 重命名 / 移动）后，清理 `expandedFolderIds`
+   * 里已不存在的 id。
+   *
+   * 规则（施工单 2026-06-27 第 5.5 章）：
+   *   - folder 删除 → id 不在 `space.folders` → 移除；
+   *   - folder 重命名 / 移动 → id 不变 → 保留；
+   *   - 清理时若发现**任何**不一致，触发一次状态更新（避免 setState 浅比较
+   *     误判"已最新"导致脏数据长期残留）。
+   */
+  useEffect(() => {
+    setExpandedFolderIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (space.folders[id]) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [space.folders]);
 
   /* ============== 日志 ============== */
 
@@ -535,7 +625,15 @@ export default function App() {
   /**
    * 侧栏点击 → 选中目标。
    *
+   * 返回值：
+   *   - `true` = 切换"已应用"（或同 note no-op + 展开祖先），调用方可以
+   *     继续推进后续副作用（例如清掉搜索态）；
+   *   - `false` = 切换被"未保存拦截"阻断（保存遮罩已弹出），调用方**不**
+   *     要做任何推进——保持结果页与当前编辑状态一致。
+   *
    * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.2 / 7.4 章 +
+   *          施工单 2026-06-27 note-search-results-and-tree-expand-persistence
+   *          第 4.5 / 4.6 / 5.1 / 5.3 / 5.4 章 +
    *          2026-06-27 第 6.8 章）：
    *   - 若当前没有 editorState、或当前是 decryptFailed、或选中的就是当前 note：
    *     直接 `applySelection`；
@@ -543,33 +641,72 @@ export default function App() {
    *     弹"保存并切换"遮罩，**不**静默切走；
    *   - 窄屏下：选中后调用 `autoCloseMobileSidebar()` 让文件树自动收起。
    *   - 若切换被"未保存拦截"阻断：保持文件树状态不变，让用户能在 sidebar
-   *     里继续点其他项或继续编辑当前 note。
+   *     里继续点其他项或继续编辑当前 note；**不**提前写 `expandedFolderIds`。
+   *   - **同 note 重复点击**：视为 no-op，但若祖先 folder 处于折叠态，
+   *     仍要把"祖先路径"写进 `expandedFolderIds`（用户可能在搜索结果
+   *     里点了当前 note；只为了"让树展开到可见位置"）。这种情况视为
+   *     "切换已应用"，调用方可以推进后续副作用。
    */
-  function trySelect(next: SidebarSelection) {
+  function trySelect(next: SidebarSelection): boolean {
     const current = currentEditorState;
-    // 同 note 重复点击：no-op。
+    // 同 note 重复点击：no-op，但确保祖先路径展开。
     if (current && next.kind === "note" && next.id === current.noteId) {
-      return;
+      const folderId = current.folderId;
+      if (folderId !== null) {
+        expandAncestorFolders(folderId);
+      }
+      return true;
     }
     if (!current) {
       applySelection(next);
       autoCloseMobileSidebar();
-      return;
+      return true;
     }
     if (current.decryptFailed) {
       // 解密失败态：当前没有"未保存修改"概念，直接允许切换。
       applySelection(next);
       autoCloseMobileSidebar();
-      return;
+      return true;
     }
     if (!isDirty(current)) {
       applySelection(next);
       autoCloseMobileSidebar();
-      return;
+      return true;
     }
     // dirty：弹"保存并切换"遮罩，保留当前 editorState。
-    // 阻断期间**不**自动收起 sidebar（让用户能继续点别的）。
+    // 阻断期间**不**自动收起 sidebar（让用户能继续点别的）；
+    // 阻断期间**不**展开目标祖先路径（避免"树像切过去了，右边其实没切"）。
     setSaveOverlay({ mode: "save-and-switch", action: { kind: "switch", target: next } });
+    return false;
+  }
+
+  /**
+   * 把 folderId 的"祖先 folderId 链"合并进 `expandedFolderIds`。
+   * - 已展开的 id 保持；
+   * - 未在 `space.folders` 里存在的 id 静默丢弃；
+   * - 根目录（folderId === null）不写；
+   * - 与现有 `expandedFolderIds` 取并集，避免覆盖用户的手工折叠。
+   *
+   * 设计缘由（施工单 2026-06-27 第 4.6 / 5.1 / 5.2 / 5.3 章）：
+   *   - 这是"点击搜索结果后自动展开祖先路径"的唯一入口；
+   *   - 由 `trySelect` / `completeSaveFlow` 在切换**成功**后调用；
+   *   - 失败的切换不调用本函数，避免半状态。
+   */
+  function expandAncestorFolders(folderId: string | null) {
+    if (folderId === null) return;
+    const chain = ancestorFolderIds(space.folders, folderId);
+    if (chain.length === 0) return;
+    setExpandedFolderIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of chain) {
+        if (space.folders[id] && !next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
   }
 
   /**
@@ -580,8 +717,15 @@ export default function App() {
    *   - 同一 note 已在编辑：no-op。
    *
    * 设计缘由（施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
-   *          第 5.2 / 6.6 章）：切到非 note 目标时不能省 cancel，否则旧
-   *   decrypt 晚回来会落在"当前没有打开 note"的中间态里飘。
+   *          第 5.2 / 6.6 章 +
+   *          施工单 2026-06-27 note-search-results-and-tree-expand-persistence
+   *          第 4.5 / 5.1 / 5.2 / 5.3 / 5.4 章）：
+   *   - 切到非 note 目标时不能省 cancel，否则旧 decrypt 晚回来会落在
+   *     "当前没有打开 note"的中间态里飘。
+   *   - **note 切换成功后**才把"祖先路径"展开：
+   *       - `trySelect` 已在 dirty 状态被阻断时不调用本函数；
+   *       - 这里再调一次，保证"切换"与"展开"是同一时刻。
+   *   - 当前 note 找不到 record（被外部删掉）时回退到 root，**不**展开任何路径。
    */
   function applySelection(next: SidebarSelection) {
     setSelection(next);
@@ -605,6 +749,12 @@ export default function App() {
       setDecryptError(null);
       return;
     }
+    // 切换"成功"——写展开状态。注意：
+    //   - 必须在 `openPersistedNote` 之前调用，让"打开"和"展开"是同一个 React commit；
+    //   - 失败时（record 不存在 / 中途解密失败）已经 return，**不会**走到这里。
+    //   - `decryptFailed` / `loading` 不影响这里——selection 仍指向新 note；
+    //     旧 `currentEditorState` 也会被 `openPersistedNote` 覆盖。
+    expandAncestorFolders(persisted.folderId);
     void openPersistedNote(persisted);
   }
 
@@ -1534,6 +1684,53 @@ export default function App() {
     setDropHover(null);
   }
 
+  /* ============== 文件树开合 ============== */
+
+  /**
+   * 用户点 folder 前面的开合按钮时触发。
+   *
+   * 规则（施工单 2026-06-27 第 4.6 / 4.7 / 4.8 章）：
+   *   - 只修改 `expandedFolderIds` 单真值；
+   *   - 已是展开 → 折叠；未在集合 → 展开；
+   *   - **不**改变 `selection`；
+   *   - 与移动模式 / 拖拽互不影响（开合按钮 stopPropagation，事件不会冒泡到 row）。
+   */
+  function handleToggleFolderExpand(folderId: string) {
+    setExpandedFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+      }
+      return next;
+    });
+  }
+
+  /* ============== 搜索结果点击 ============== */
+
+  /**
+   * 搜索结果项点击：走现有 `trySelect` 链路。
+   *
+   * 关键收口（施工单 2026-06-27 第 4.5 / 5.1 / 5.4 章）：
+   *   - `trySelect` 返回 `true` = 切换已应用：清掉 `searchQuery` / `activeTag`，
+   *     右侧退出"搜索结果页"，进入 note 编辑视图。
+   *   - `trySelect` 返回 `false` = 被未保存修改阻断（保存遮罩已弹出）：
+   *     **不**清搜索态，让用户继续在结果页里挑别的目标——与施工单
+   *     "保持当前结果页与当前编辑状态一致"对齐。
+   *
+   * 不能反过来"先清搜索态再 trySelect"：那样会在保存遮罩弹出后，右侧
+   * 立刻退出结果页回到当前 note 编辑器，与"用户还没确认是否保存"的
+   * 状态不一致。
+   */
+  function handleSearchResultSelect(noteId: string) {
+    const switched = trySelect({ kind: "note", id: noteId });
+    if (switched) {
+      setSearchQuery("");
+      setActiveTag(null);
+    }
+  }
+
   /* ============== 派生 UI 数据 ============== */
 
   const allTags = useMemo(() => {
@@ -1585,23 +1782,33 @@ export default function App() {
   }, [space, currentEditorState]);
 
   /**
-   * 搜索 / tag 过滤后剩余的 note id 集合。
-   * - searchQuery：note.title（trim + 小写）包含 query；
-   * - activeTag：note.tags 含该 tag。
-   * 不过滤 folder：folder 始终显示。
+   * 搜索 / tag 过滤的"结果"集合（驱动右侧文档区搜索结果页）。
+   *
+   * 设计缘由（施工单 2026-06-27 note-search-results-and-tree-expand-persistence
+   *          第 4.1 / 4.2 / 4.3 / 4.4 / 7.1 章）：
+   *   - **不**再作用于左侧文件树——树永远展示真实完整树；
+   *   - 仅匹配 `note.title`（trim + lowerCase + includes）和 `note.tags`
+   *     （大小写不敏感精确 tag 命中）；两者都为空 → 结果为空；
+   *   - `folder.title` 永远不参与；
+   *   - note 正文永远不参与；
+   *   - 结果集基于 `viewSpace.notes`（持久层 + 当前未保存新 note）；
+   *   - 排序 = 树自然顺序（与左侧树一致），由 `collectNotesInTreeOrder` 保证。
    */
-  const visibleNoteIds = useMemo<Set<string> | null>(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const tag = activeTag;
-    if (!q && !tag) return null;
-    const ids = new Set<string>();
-    for (const n of Object.values(viewSpace.notes)) {
-      if (tag && !n.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) continue;
-      if (q && !n.title.trim().toLowerCase().includes(q)) continue;
-      ids.add(n.id);
-    }
-    return ids;
-  }, [viewSpace.notes, searchQuery, activeTag]);
+  const isSearchMode = useMemo<boolean>(() => {
+    return searchQuery.trim().length > 0 || activeTag !== null;
+  }, [searchQuery, activeTag]);
+
+  const searchResults = useMemo(() => {
+    if (!isSearchMode) return [];
+    const tree = buildTree(viewSpace.folders, viewSpace.notes);
+    const treeOrdered = collectNotesInTreeOrder(tree);
+    return buildSearchResults({
+      treeOrderedNotes: treeOrdered.map((n) => viewSpace.notes[n.id]).filter(Boolean) as StoredNoteRecord[],
+      searchQuery,
+      activeTag,
+      pathLabelFor: (folderId) => folderPathLabel(viewSpace.folders, folderId)
+    });
+  }, [isSearchMode, viewSpace, searchQuery, activeTag]);
 
   const currentFolder: StoredFolderRecord | null = useMemo(() => {
     if (selection.kind === "folder" && selection.id !== null) {
@@ -1730,6 +1937,8 @@ export default function App() {
     setLastError(null);
     setSearchQuery("");
     setActiveTag(null);
+    // sidebar 展开状态：清空。下一位 owner 登录时会按自己的记录重新加载。
+    setExpandedFolderIds(new Set());
   }
 
   /**
@@ -1861,7 +2070,6 @@ export default function App() {
       <main className={`workspace ${sidebarOpen ? "is-sidebar-open" : "is-sidebar-collapsed"}`}>
         <NotesSidebar
           space={viewSpace}
-          visibleNoteIds={visibleNoteIds}
           ephemeralNoteId={
             currentEditorState && currentEditorState.kind === "new"
               ? currentEditorState.noteId
@@ -1877,6 +2085,8 @@ export default function App() {
           moveState={moveState}
           ownerLabel={ownerLabel}
           disabled={isLoggingIn}
+          expandedFolderIds={expandedFolderIds}
+          onToggleFolderExpand={handleToggleFolderExpand}
           onSelect={trySelect}
           onCreateNote={() => handleCreateNote()}
           onCreateFolder={() => handleCreateFolder()}
@@ -1894,8 +2104,21 @@ export default function App() {
           allTags={allTags}
         />
 
+        {/*
+          文档区（document-panel）渲染分支：
+            - `isSearchMode` → 搜索结果页（无 editor / folder 详情）；
+            - 否则 → 现有 note / folder / root 视图。
+          硬切换后不再做"上半结果 + 下半编辑器"的双栏混搭。
+        */}
         <section className="document-panel">
-          {currentEditorState ? (
+          {isSearchMode ? (
+            <SearchResultsPanel
+              searchQuery={searchQuery}
+              activeTag={activeTag}
+              results={searchResults}
+              onSelect={handleSearchResultSelect}
+            />
+          ) : currentEditorState ? (
             <>
               <DocumentToolbar
                 draft={editorStateToDraft(currentEditorState)}

@@ -219,6 +219,69 @@ export function folderAncestorChain(
   return out;
 }
 
+/**
+ * 取得某 folderId 的"祖先 folderId 链"（不含自己，从根到自己）。
+ * 找不到的 parentId 在链上视为"链路中断"——遇到未记录的 id 立即停止，
+ * 不抛错，避免脏数据把整条链炸掉。
+ *
+ * 用途：点击搜索结果后，要把"祖先路径"在文件树上全部展开。
+ */
+export function ancestorFolderIds(
+  folders: Record<string, StoredFolderRecord>,
+  folderId: string | null
+): string[] {
+  if (folderId === null) return [];
+  const out: string[] = [];
+  let cur: string | null = folderId;
+  const seen = new Set<string>();
+  while (cur !== null) {
+    if (seen.has(cur)) break; // 防御：循环 parentId 自指
+    seen.add(cur);
+    out.unshift(cur);
+    const node: StoredFolderRecord | undefined = folders[cur];
+    if (!node) break;
+    cur = node.parentId;
+  }
+  return out;
+}
+
+/**
+ * 把 folderId 链转换成"显示 path"：从根到当前 folder 拼接 title。
+ * 找不到的 folderId 静默跳过对应段；根目录下的 note → "根目录"。
+ * 段与段之间用 " / " 分隔。
+ */
+export function folderPathLabel(
+  folders: Record<string, StoredFolderRecord>,
+  folderId: string | null
+): string {
+  if (folderId === null) return "根目录";
+  const chain = folderAncestorChain(folders, folderId);
+  if (chain.length === 0) return "根目录";
+  return ["根目录", ...chain.map((f) => f.title || "未命名文件夹")].join(" / ");
+}
+
+/**
+ * 按树自然顺序遍历所有 note（根 → 递归 folder），收集命中的 note。
+ * 用途：搜索结果排序（与用户左侧树看到的顺序一致）。
+ *
+ * 设计缘由（施工单 2026-06-27 note-search-results-and-tree-expand-persistence
+ *          第 4.4 / 7.4 章）：
+ *   - 不引入"相关性评分"系统，不做高亮 / 模糊排序；
+ *   - 树显示顺序 = 搜索结果顺序，用户感知"一致"。
+ */
+export function collectNotesInTreeOrder(
+  tree: TreeRootNode
+): TreeNoteNode[] {
+  const out: TreeNoteNode[] = [];
+  const walkFolder = (f: TreeFolderNode) => {
+    for (const child of f.folders) walkFolder(child);
+    for (const n of f.notes) out.push(n);
+  };
+  for (const f of tree.folders) walkFolder(f);
+  for (const n of tree.notes) out.push(n);
+  return out;
+}
+
 /** 是否根目录（含未选中场景）。 */
 export function isRootId(id: string | null): id is null {
   return id === null;

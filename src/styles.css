@@ -678,6 +678,17 @@ code {
   cursor: pointer;
 }
 
+/*
+ * 键盘焦点视觉：folder / note / root 三个变体都共用。
+ * - 用 `:focus-visible` 而不是 `:focus`，避免鼠标点击时也画一圈；
+ * - 颜色取 accent，宽度 2px，offset -2px 让边框"贴"在 row 边缘，
+ *   不抢视觉权重，但键盘用户能清楚看到焦点位置。
+ */
+.tree-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
 .tree-item:hover:not(:disabled) {
   background: var(--color-bg-hover);
 }
@@ -762,13 +773,68 @@ code {
 }
 
 .tree-item__icon {
-  width: 10px;
-  text-align: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-muted);
 }
 
 .tree-item.is-selected .tree-item__icon {
   color: var(--color-accent);
+}
+
+/*
+ * folder 前面的独立开合按钮（chevron）。
+ * 设计缘由（施工单 2026-06-27 第 4.8 / 4.9 / 7.2 章）：
+ *   - 独立按钮：tabIndex=-1，避免被 Tab 序列取到，鼠标点击/键盘 Enter 都行；
+ *   - 颜色与 icon 同步，跟随父级 currentColor 走；
+ *   - 与 row 的 onClick 分离，stopPropagation 防止冒泡。
+ *   - 视觉上比标题小一档：标题是主要操作，箭头是次要操作。
+ */
+.tree-item__expand {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tree-item__expand:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+.tree-item__expand:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  color: var(--color-text);
+}
+
+.tree-item.is-selected .tree-item__expand {
+  color: var(--color-accent);
+}
+
+/*
+ * note 行前面的等宽占位：让 note 的 icon 跟 folder 的 icon 处于同一列，
+ * 标题起始位置对齐。
+ */
+.tree-item__expand-spacer {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  display: inline-block;
 }
 
 .tree-item__label {
@@ -1459,6 +1525,175 @@ code {
 }
 
 /* ============== responsive ============== */
+
+/*
+ * 设计缘由（施工单 2026-06-27 note-search-results-and-tree-expand-persistence
+ *          第 7.6 / 4.5 章）：
+ *   - 搜索结果页要"看起来"是文档区的另一种状态，**不**演变成厚重 dashboard；
+ *   - 容器：用 `padding` 顶齐 document-head 的视觉起点，与 title 共用同一宽度；
+ *   - 摘要：低对比 chip，明确告诉用户"这次搜索的条件来自哪里"；
+ *   - 结果项：固定两行：
+ *       - 第一行标题字号略大（14.5px 左右，仍弱于主标题）；
+ *       - 第二行 path 弱化（11.5px + 灰）；
+ *   - 空结果：明确"无匹配结果"+ 提示用户换关键词；
+ *   - 窄屏：结果项的 title 仍允许单行省略号；path 允许两行（不可破坏对齐）。
+ */
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 32px 32px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.search-results__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.search-results__eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.search-results__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+
+.search-results__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-soft);
+}
+
+.search-results__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-soft);
+  font-size: 11.5px;
+  color: var(--color-text-soft);
+}
+
+.search-results__chip strong {
+  color: var(--color-text);
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+
+.search-results__hint {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+.search-results__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-height: 240px;
+  text-align: center;
+  color: var(--color-text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.search-results__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.search-results__item {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.search-results__item:hover {
+  background: var(--color-bg-hover);
+}
+
+.search-results__item:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  background: var(--color-bg-soft);
+}
+
+.search-results__item-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.35;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-results__item-path {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 720px) {
+  .search-results {
+    padding: 14px 18px 24px;
+  }
+  .search-results__title {
+    font-size: 18px;
+  }
+  .search-results__item-title {
+    font-size: 14px;
+  }
+  .search-results__item-path {
+    /* 窄屏允许 path 略放宽显示，但保留省略号防止压扁对齐。 */
+    white-space: normal;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
 
 /*
  * 硬切换后的响应式断点（施工单 2026-06-27 第 5 / 8.7 章）：
