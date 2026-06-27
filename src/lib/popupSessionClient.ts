@@ -17,7 +17,10 @@
 //   - `cancelRequest(id)`：fire-and-forget 顶层 `cancel` 报文，**不**等 ack；
 //     旧请求晚回来的结果由业务层做代际隔离丢弃。
 //   - popup 关闭 / 刷新后，下次 `runRequest()` 重新开窗。
-//   - 不做客户端业务队列；不做自动重试；不做跨 opener 编排。
+//   - 不做客户端业务队列；不做跨 opener 编排。
+//   - **仅**在 `ready` 已收到、但首条 `request` 发送前 popup 又刚好失效的
+//     极小竞态窗口里，transport 允许内部重建一次 session 并重发同一条 request；
+//     这不是通用自动重试，不扩展到业务失败 / result timeout / user_rejected。
 //
 // 这一层拥有：
 //   - 长期 `message` 监听（ResultDispatcher）；
@@ -134,11 +137,29 @@ export class PopupSessionClient {
    *
    * 不再因已有 pending 就拒绝——session 允许并行持有任意条 pending request；
    * 业务层负责"当前 note 是谁"的判断与旧请求淘汰。
+   *
+   * 额外边界（刷新 note 页重新登录时暴露出的竞态）：
+   *   - `ensureSession()` 成功只代表"刚刚收到过 ready"；
+   *   - 不能推出"下一行 `popup.postMessage(request)` 时 popup 仍活着"；
+   *   - 若 popup 恰好在 `ready -> request_sent` 之间关闭 / 刷新 / 发出
+   *     `closing`，当前调用会把它识别为 `popup_closed`，并只重建一次
+   *     session 后重发同一条 request；
+   *   - 第二次仍失败则直接向上抛 `popup_closed`，不做循环重试。
    */
   async runRequest<M extends ProtocolMethod>(request: ProtocolRequestMessage<M>): Promise<ProtocolResultMessage> {
+    return this.runRequestWithSingleReconnect(request, true);
+  }
+
+  private async runRequestWithSingleReconnect<M extends ProtocolMethod>(
+    request: ProtocolRequestMessage<M>,
+    allowReconnectRetry: boolean
+  ): Promise<ProtocolResultMessage> {
     await this.ensureSession();
-    const targetOrigin = this.currentTargetOrigin!;
-    const popup = this.popup!;
+    const context = this.currentSendContext();
+    if (!context) {
+      return this.retryRequestAfterSessionLoss(request, allowReconnectRetry);
+    }
+    const { popup, targetOrigin, dispatcher } = context;
     let unsubscribe: () => void = () => undefined;
     const pending: PendingRequest = {
       resolve: () => undefined,
@@ -148,7 +169,7 @@ export class PopupSessionClient {
     const promise = new Promise<ProtocolResultMessage>((resolve, reject) => {
       pending.resolve = resolve;
       pending.reject = reject;
-      unsubscribe = this.dispatcher!.awaitResult(request.id, (msg) => {
+      unsubscribe = dispatcher.awaitResult(request.id, (msg) => {
         this.clearResultTimer(pending);
         this.pendingRequests.delete(request.id);
         this.log("result_received", msg, undefined);
@@ -164,6 +185,9 @@ export class PopupSessionClient {
       unsubscribe?.();
       this.clearResultTimer(pending);
       this.pendingRequests.delete(request.id);
+      if (this.didLoseSessionDuringSend(popup, targetOrigin)) {
+        return this.retryRequestAfterSessionLoss(request, allowReconnectRetry);
+      }
       this.log("busy_rejected", err, "Failed to send request");
       throw new ProtocolTransportError("invalid_origin", err instanceof Error ? err.message : "Failed to send request");
     }
@@ -174,6 +198,74 @@ export class PopupSessionClient {
       pending.reject(new ProtocolTransportError("result_timeout", "Timed out waiting for result"));
     }, this.opts.resultTimeoutMs);
     return promise;
+  }
+
+  /**
+   * 当前是否仍持有一份可发送 request 的 session 上下文。
+   *
+   * 设计缘由：
+   *   - `ensureSession()` 返回后，`this.popup` / `this.dispatcher` /
+   *     `this.currentTargetOrigin` 仍可能被 `closing` 或 close poller 异步清空；
+   *   - 这里把"是否还能安全发送 request"收口成一次同步检查，避免把
+   *     `null.postMessage` 误包装成 `invalid_origin`。
+   */
+  private currentSendContext():
+    | {
+        popup: Window;
+        targetOrigin: string;
+        dispatcher: ReturnType<typeof createResultDispatcher>;
+      }
+    | null {
+    if (
+      this.state !== "connected" ||
+      !this.popup ||
+      !this.currentTargetOrigin ||
+      !this.dispatcher ||
+      isPopupClosed(this.popup)
+    ) {
+      return null;
+    }
+    return {
+      popup: this.popup,
+      targetOrigin: this.currentTargetOrigin,
+      dispatcher: this.dispatcher
+    };
+  }
+
+  /**
+   * 判断一次 `postMessage(request)` 抛错后，是否其实是 session 已经丢了。
+   *
+   * 只要出现下列任一情况，就按 `popup_closed` 处理，而不是 `invalid_origin`：
+   *   - 调用时拿到的 popup 句柄已 closed；
+   *   - transport 当前真值里的 popup / targetOrigin 已被异步清空；
+   *   - popup 句柄或 targetOrigin 已切换到另一轮 session。
+   */
+  private didLoseSessionDuringSend(popup: Window, targetOrigin: string): boolean {
+    if (isPopupClosed(popup)) return true;
+    if (!this.popup || !this.currentTargetOrigin) return true;
+    if (this.popup !== popup) return true;
+    if (this.currentTargetOrigin !== targetOrigin) return true;
+    return false;
+  }
+
+  /**
+   * `ready -> request_sent` 之间丢会话时的唯一恢复入口。
+   *
+   * 规则：
+   *   - 先把当前 transport session 明确收敛到 `disconnected`；
+   *   - 允许完整重建**一次** session 并重发原 request；
+   *   - 第二次仍失败则直接向上抛 `popup_closed`。
+   */
+  private async retryRequestAfterSessionLoss<M extends ProtocolMethod>(
+    request: ProtocolRequestMessage<M>,
+    allowReconnectRetry: boolean
+  ): Promise<ProtocolResultMessage> {
+    this.log("popup_closed", { requestId: request.id }, "popup lost before request send");
+    this.teardownSession("popup_closed", "Popup was closed before sending request");
+    if (allowReconnectRetry) {
+      return this.runRequestWithSingleReconnect(request, false);
+    }
+    throw new ProtocolTransportError("popup_closed", "Popup was closed before sending request");
   }
 
   /**
@@ -212,20 +304,6 @@ export class PopupSessionClient {
    * 外部再次 `ensureSession()` 时会重新开窗。
    */
   closeSession(): void {
-    this.rejectAllPending("popup_closed", "Popup session was closed");
-    if (this.dispatcher) {
-      this.dispatcher.close();
-      this.dispatcher = null;
-    }
-    if (this.combinedListener) {
-      this.env.removeMessageListener(this.combinedListener);
-      this.combinedListener = null;
-    }
-    if (this.closePoller) {
-      this.env.clearInterval(this.closePoller);
-      this.closePoller = null;
-    }
-    this.listenerInstalled = false;
     if (this.popup && !isPopupClosed(this.popup)) {
       try {
         this.popup.close();
@@ -233,10 +311,7 @@ export class PopupSessionClient {
         // ignore
       }
     }
-    this.popup = null;
-    this.currentTargetOrigin = null;
-    this.readyPromise = null;
-    this.transitionTo("disconnected", "popup_closed");
+    this.teardownSession("popup_closed", "Popup session was closed");
   }
 
   /* ============== 内部 ============== */
@@ -307,7 +382,35 @@ export class PopupSessionClient {
   }
 
   private handleSessionClosedByServer(_reason: "closing"): void {
-    this.rejectAllPending("popup_closed", "Popup session ended by server (closing)");
+    this.teardownSession("closing", "Popup session ended by server (closing)");
+  }
+
+  private startClosePoller(): void {
+    if (this.closePoller) return;
+    const closePollMs = this.opts.closePollMs ?? 500;
+    this.closePoller = this.env.setInterval(() => {
+      if (isPopupClosed(this.popup)) {
+        this.log("popup_closed", undefined, undefined);
+        this.teardownSession("popup_closed", "Popup was closed before the protocol completed");
+      }
+    }, closePollMs);
+  }
+
+  /**
+   * session 作废时的统一收口。
+   *
+   * 约束：
+   *   - 必须批量 reject 全部 pending request；
+   *   - 必须解绑 result / closing listener 与 close poller；
+   *   - 必须清空 popup / targetOrigin / readyPromise，保证下一次一定走完整重建；
+   *   - `closing` 与 `popup_closed` 仅影响最后的连接状态 reason，不引入不同的
+   *     业务补偿策略。
+   */
+  private teardownSession(
+    reason: "closing" | "popup_closed",
+    pendingMessage: string
+  ): void {
+    this.rejectAllPending("popup_closed", pendingMessage);
     if (this.dispatcher) {
       this.dispatcher.close();
       this.dispatcher = null;
@@ -324,35 +427,7 @@ export class PopupSessionClient {
     this.popup = null;
     this.currentTargetOrigin = null;
     this.readyPromise = null;
-    this.transitionTo("disconnected", "closing");
-  }
-
-  private startClosePoller(): void {
-    if (this.closePoller) return;
-    const closePollMs = this.opts.closePollMs ?? 500;
-    this.closePoller = this.env.setInterval(() => {
-      if (isPopupClosed(this.popup)) {
-        this.log("popup_closed", undefined, undefined);
-        this.rejectAllPending("popup_closed", "Popup was closed before the protocol completed");
-        this.transitionTo("disconnected", "popup_closed");
-        if (this.dispatcher) {
-          this.dispatcher.close();
-          this.dispatcher = null;
-        }
-        if (this.combinedListener) {
-          this.env.removeMessageListener(this.combinedListener);
-          this.combinedListener = null;
-        }
-        if (this.closePoller) {
-          this.env.clearInterval(this.closePoller);
-          this.closePoller = null;
-        }
-        this.listenerInstalled = false;
-        this.popup = null;
-        this.currentTargetOrigin = null;
-        this.readyPromise = null;
-      }
-    }, closePollMs);
+    this.transitionTo("disconnected", reason);
   }
 
   /**
