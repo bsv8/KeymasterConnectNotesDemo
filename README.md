@@ -38,8 +38,29 @@
 
 ### Notes 工作区
 
-只在 `identity !== null` 时渲染；沿用之前的 sidebar / editor / inspector 三栏。
-页头 `ConnectStatus` 提供：
+只在 `identity !== null` 时渲染。硬切换后的页面结构：
+
+```
+app-header
+app-banner        ← 应用级提示（error / decrypt / move）
+workspace         ← 二栏 grid：sidebar | document-panel
+  ├ sidebar
+  │   ├ header（+ note / + 文件夹）
+  │   ├ 搜索
+  │   ├ tag 过滤
+  │   ├ 简化 folder 工具条（仅 folder 选中时显示）
+  │   └ 根目录 + folder/note 树 + 右键菜单 + 拖拽
+  └ document-panel
+      ├ document-toolbar   ← Notion 风格两排工具条
+      ├ document-head      ← 大号 title
+      └ document-editor    ← BlockNote 正文 / 失败态 / 空态
+```
+
+**不再**存在独立的右栏 `NoteInspector`：tag / 状态 / 保存 / 删除 / 放弃
+修改全部上收至 `document-toolbar`。`title` 回到 `document-head`，与正文
+视觉上是同一条文档。
+
+页头 `ConnectStatus` 不再展示错误横条（已上收至 `app-banner`），仅承担：
 
 - `page origin` / `target origin` / `publicKey` / `last login` 信息；
 - 重新登录按钮；
@@ -49,6 +70,54 @@
 - **删除当前本地数据** 按钮，点击后走二次确认；确认后删除当前 `publicKey`
   对应的整个本地 notes 空间（folders + notes + 密文 + 明文 metadata），
   立即退回 LockScreen。**不会**删除 Keymaster 身份本身。
+
+### 应用级 banner
+
+`app-banner` 位于 `app-header` 与 `workspace` 之间，用于统一承接应用级提示：
+
+- 错误（`lastError`，最高优先级）
+- 解密失败摘要
+- 移动模式提示
+- 普通提示
+
+同一时刻只显示最高优先级的一条；移动模式 / 错误横条右侧可带一个轻量操作
+按钮（如"取消"）。`saveOverlay` 仍是阻塞遮罩，**不**被降级成 banner。
+
+### 文档区结构
+
+`document-panel` 内部固定为三段：
+
+1. `document-toolbar`：Notion 风格两排工具条；轻量、克制，视觉权重**弱于** `title` 与正文。
+   - 第一排：tag（`TagInput`） + 弱化说明；
+   - 第二排：状态信息（`created` / `updated` / `contentType` / 密文长度 /
+     未保存标记）+ 动作按钮（`加密保存` / `放弃修改` / `删除`）。
+2. `document-head`：仅大号 `title` 输入框；与正文同轴线，视觉权重**强于**工具条，让标题看起来像文档本体的一部分。
+3. `document-editor`：BlockNote 正文 / 失败态 / 空态。
+
+### sidebar 结构
+
+`sidebar` 从上到下为：
+
+1. 顶部标题与新建按钮
+2. 搜索框
+3. tag 过滤
+4. 当前选中 folder 的**简化**工具条（标题 + `updated` + 删除文件夹）
+5. 根目录条目 + folder / note 树 + 右键菜单 + 拖拽
+
+**不**在 sidebar 中重复显示 note 工具条——避免与 `document-toolbar` 形成
+双入口。**不**在 sidebar 内显示移动模式横条（已挪至 `app-banner`）。
+
+### 窄屏
+
+窄屏（< 720px）下文件树支持手工展开 / 收起：
+
+- `app-header` 出现"目录 / 收起目录"按钮；
+- 用户点目录按钮：展开文件树；
+- 用户再点：收起；
+- 选中 root / folder / note 后文件树自动收起；
+- 收起后正文区域不被多余空白占位；
+- 工具条在窄屏下允许换行，但状态与按钮仍属同一排（`row--actions`），不会被
+  拆回右侧独立栏。
 
 ## 删除当前本地数据（硬切换硬约束）
 
@@ -357,13 +426,14 @@ src/
     storage.ts           # owner 分区 KV + folder/note CRUD + 冲突检查
   components/
     LockScreen.tsx       # 未登录态登录壳（产品介绍 + target origin 输入 + 登录按钮）
-    ConnectStatus.tsx    # 已登录态顶栏连接状态 + 重新登录 / 切换身份
-    NotesSidebar.tsx     # 左侧 folder/note 树 + 右键菜单 + 拖拽
+    ConnectStatus.tsx    # 已登录态顶栏连接状态 + 重新登录 / 切换身份（不再展示错误横条）
+    NotesSidebar.tsx     # 左侧 folder/note 树 + 右键菜单 + 拖拽 + 简化 folder 工具条
     NoteEditor.tsx       # BlockNote 包装（markdown 单真值）
-    NoteInspector.tsx    # 右侧元数据 + 保存/删除
+    DocumentToolbar.tsx  # 文档区顶部 Notion 风格两排工具条（tag + 状态 + 动作）
   App.tsx                # 状态真值集中地 + LockScreen / Notes 二段式渲染
+                         # + app-banner（应用级提示）+ 窄屏文件树开合状态
   main.tsx               # 挂载入口
-  styles.css             # LockScreen 样式 + 工作区样式 + 右键菜单 / 拖拽视觉态
+  styles.css             # LockScreen 样式 + 工作区样式 + banner / toolbar / 响应式
 ```
 
 ## 不允许的事
@@ -398,4 +468,10 @@ src/
 - 不依赖 `session_busy` / 单 `inFlight` 作为 note 打开链路的前端控制手段；
 - 不把"cancel 已发送"误当成"旧请求一定不会再回结果"；
 - 不在 `executing` 阶段尝试"半取消"或"结果反转"；
-- 不为了"业务完整"顺手引入 note 打开的请求池 / 优先级 / 批处理 / 重试 / 恢复。
+- 不为了"业务完整"顺手引入 note 打开的请求池 / 优先级 / 批处理 / 重试 / 恢复；
+- 不做三栏工作区（不再保留 `NoteInspector` 右侧独立面板）；
+- 不把 `title` 塞进 toolbar（`title` 属于 `document-head`，与正文同轴线）；
+- 不在 sidebar 根目录上方同时显示 note 工具条和 folder 工具条（仅 folder 时显示简化工具条）；
+- 不把 `saveOverlay` 降级为普通 banner（仍是阻塞遮罩）；
+- 不顺手做 Office 式富文本工具条（粗体 / 标题 / 列表等按钮不进 `document-toolbar`）；
+- 不为窄屏另造一套业务状态机（开合态与桌面共用同一份 selection / editor 真值）。

@@ -2,10 +2,13 @@
 // notes 页头连接状态条。
 //
 // 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 9.3 节 +
-//          2026-06-26 delete-current-owner-space 第 3.1 / 7.3 节）：
+//          2026-06-26 delete-current-owner-space 第 3.1 / 7.3 节 +
+//          2026-06-27 notion-document-toolbar-and-mobile-sidebar
+//          第 4.7 / 8.2 章）：
 //   - 只服务于已登录态（notes 页面顶部），不再承担未登录主入口页面职责。
 //   - popup 连接状态机来自 session client（idle / opening / connected / disconnected）。
-//   - 最近错误展示来自 App 持有的"最后一次协议错误"真值。
+//   - **不再**在本组件内部展示"最近错误"横条——应用级 `lastError` 已统一
+//     收口到 App 的 banner 上；本组件**不**与 banner 重复展示同一条错误。
 //   - 已登录态按钮区收口三个动作：重新登录 / 切换身份 / 删除当前本地数据。
 //   - "删除当前本地数据"语义上比"切换身份"更强：会清掉当前 owner 本地空间。
 //     因此按钮在视觉上需要明显是危险动作，但仍弱于主操作，不能喧宾夺主。
@@ -21,7 +24,6 @@ export interface ConnectStatusProps {
   targetOrigin: string;
   publicKeyHex: string | null;
   lastLoginAt: number | null;
-  lastError: string | null;
   isLoggingIn: boolean;
   onLogin: () => void;
   onForget: () => void;
@@ -77,12 +79,6 @@ export function ConnectStatus(props: ConnectStatusProps) {
           </>
         ) : null}
       </div>
-
-      {props.lastError ? (
-        <div className="connect-status__error" role="alert">
-          {props.lastError}
-        </div>
-      ) : null}
     </div>
   );
 }

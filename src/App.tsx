@@ -3,7 +3,9 @@
 //
 // 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4-10 章 +
 //          施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
-//          第 4-10 章）：
+//          第 4-10 章 +
+//          施工单 2026-06-27 notion-document-toolbar-and-mobile-sidebar
+//          第 3 / 4 / 5 / 6 章）：
 //   - 顶层固定二态：`identity === null` 时只渲染 `LockScreen`；已登录才渲染工作区。
 //   - **当前编辑内存态单真值**：整页只允许存在一份"当前正在编辑的内存态"
 //     `currentEditorState`。它同时承担：
@@ -36,6 +38,17 @@
 //       - popup session client 已是 multi-pending，不再有 `session_busy`；
 //       - 当前 note 切到 folder / root / 切换 owner / 退出工作区时，
 //         也要对旧 pending decrypt 发 cancel，并清空代际。
+//   - **硬切换后的工作区布局**（施工单 2026-06-27 notion-document-toolbar）：
+//       - 顶层：header → banner → workspace；
+//       - workspace = sidebar + document-panel 两栏，不再有右栏 inspector；
+//       - document-panel 内部固定 = document-toolbar → document-head →
+//         document-editor；title 回到 document-head；
+//       - 应用级提示（lastError / decryptError / 移动模式）统一进 banner；
+//       - saveOverlay 仍是阻塞遮罩，不被降级成 banner；
+//       - sidebar 内不再保留移动模式横条（搬至 banner）；
+//       - 选中 folder 时 sidebar 根目录上方显示简化 folder 工具条；
+//       - 窄屏下文件树支持手工展开 / 收起；选中 root / folder / note 后自动收起。
+//       - 业务状态机、保存 / 切换 / 解密拦截等不变。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -80,7 +93,7 @@ import { checkDragLegality, describeDragLegalityReason } from "./lib/path";
 import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
 import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState, type SidebarSelection } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
-import { NoteInspector } from "./components/NoteInspector";
+import { DocumentToolbar } from "./components/DocumentToolbar";
 import { LockScreen } from "./components/LockScreen";
 import { NameInputDialog } from "./components/NameInputDialog";
 import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
@@ -94,6 +107,9 @@ const READY_TIMEOUT_MS = 10_000;
 const RESULT_TIMEOUT_MS = 60_000;
 const POPUP_WIDTH = 520;
 const POPUP_HEIGHT = 760;
+
+/** 窄屏判定阈值：与 styles.css 中的媒体查询保持一致。 */
+const MOBILE_BREAKPOINT = 720;
 
 interface IdentitySnapshot {
   publicKeyHex: string;
@@ -245,7 +261,7 @@ export default function App() {
    */
   const currentEditorStateRef = useRef<CurrentEditorState | null>(null);
 
-  /** 解密错误文案（用于 editor-stage 顶栏红条）。 */
+  /** 解密错误文案（用于 banner 摘要 + 文档区提示）。 */
   const [decryptError, setDecryptError] = useState<string | null>(null);
 
   /** 保存阻塞遮罩。null = 不显示。 */
@@ -268,6 +284,15 @@ export default function App() {
   const [moveState, setMoveState] = useState<MoveState | null>(null);
   /** 页面内命名弹层：null = 不显示。 */
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
+
+  /**
+   * 窄屏文件树开合状态。null = 还未初始化（用窗口宽度判定初始值）。
+   * - 桌面端（>= MOBILE_BREAKPOINT）始终视为"展开"，但 state 仍为 null 时
+   *   UI 也按"展开"处理；这避免桌面端误收起。
+   * - 窄屏（< MOBILE_BREAKPOINT）默认收起；用户点"目录"按钮时展开；
+   *   选中 root / folder / note 后自动收起；用户可再次手动展开。
+   */
+  const [isSidebarOpenOnMobile, setIsSidebarOpenOnMobile] = useState<boolean | null>(null);
 
   const sessionRef = useRef<PopupSessionClient | null>(null);
   /**
@@ -359,6 +384,36 @@ export default function App() {
     currentEditorStateRef.current = currentEditorState;
   }, [currentEditorState]);
 
+  /**
+   * 监听窗口尺寸，决定"是否处于窄屏"。
+   * - 桌面端强制 `isSidebarOpenOnMobile = true`（让 sidebar 永远显示）；
+   * - 窄屏下：state 保留为用户的最新选择（首次进入窄屏时初始化为 false）。
+   *
+   * 设计缘由（施工单 2026-06-27 第 5.2 / 8.1 章）：
+   *   - 桌面端"开合状态"不参与视觉收口，仅窄屏使用；
+   *   - 在窄屏下：用户点目录按钮 = 展开；用户再点 = 收起；
+   *   - 在窄屏下：选中 root / folder / note = 自动收起；
+   *   - 用户后续可再次手工展开（不会被永远锁死）。
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const evaluate = () => {
+      const isMobile = window.innerWidth < MOBILE_BREAKPOINT;
+      if (!isMobile) {
+        // 桌面端：永远展开，state 置 true。
+        if (isSidebarOpenOnMobile !== true) setIsSidebarOpenOnMobile(true);
+        return;
+      }
+      // 窄屏：首次进入窄屏时若 state 仍为 null，初始化为收起。
+      if (isSidebarOpenOnMobile === null) {
+        setIsSidebarOpenOnMobile(false);
+      }
+    };
+    evaluate();
+    window.addEventListener("resize", evaluate);
+    return () => window.removeEventListener("resize", evaluate);
+  }, [isSidebarOpenOnMobile]);
+
   /* ============== 加载当前 owner 的空间 ============== */
 
   useEffect(() => {
@@ -438,11 +493,15 @@ export default function App() {
   /**
    * 侧栏点击 → 选中目标。
    *
-   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.2 / 7.4 章）：
+   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.2 / 7.4 章 +
+   *          2026-06-27 第 6.8 章）：
    *   - 若当前没有 editorState、或当前是 decryptFailed、或选中的就是当前 note：
    *     直接 `applySelection`；
    *   - 若当前是 dirty（任何已落库 note 的修改，或新建 note 的存在）：
-   *     弹"保存并切换"遮罩，**不**静默切走。
+   *     弹"保存并切换"遮罩，**不**静默切走；
+   *   - 窄屏下：选中后调用 `autoCloseMobileSidebar()` 让文件树自动收起。
+   *   - 若切换被"未保存拦截"阻断：保持文件树状态不变，让用户能在 sidebar
+   *     里继续点其他项或继续编辑当前 note。
    */
   function trySelect(next: SidebarSelection) {
     const current = currentEditorState;
@@ -452,18 +511,22 @@ export default function App() {
     }
     if (!current) {
       applySelection(next);
+      autoCloseMobileSidebar();
       return;
     }
     if (current.decryptFailed) {
       // 解密失败态：当前没有"未保存修改"概念，直接允许切换。
       applySelection(next);
+      autoCloseMobileSidebar();
       return;
     }
     if (!isDirty(current)) {
       applySelection(next);
+      autoCloseMobileSidebar();
       return;
     }
     // dirty：弹"保存并切换"遮罩，保留当前 editorState。
+    // 阻断期间**不**自动收起 sidebar（让用户能继续点别的）。
     setSaveOverlay({ mode: "save-and-switch", action: { kind: "switch", target: next } });
   }
 
@@ -501,6 +564,18 @@ export default function App() {
       return;
     }
     void openPersistedNote(persisted);
+  }
+
+  /**
+   * 窄屏下选中后自动收起 sidebar。
+   * 设计缘由（施工单 2026-06-27 第 5.2 / 5.3 / 6.8 章）：
+   *   - 只在窄屏生效（桌面端 isSidebarOpenOnMobile === true，不改）；
+   *   - 选中后不强制锁死，用户可再次手动展开。
+   */
+  function autoCloseMobileSidebar() {
+    if (typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT) {
+      setIsSidebarOpenOnMobile(false);
+    }
   }
 
   /* ============== 解密 / 装载 baseline ============== */
@@ -1217,10 +1292,12 @@ export default function App() {
   function completeSaveFlow(action: AfterSaveAction) {
     if (action.kind === "switch") {
       applySelection(action.target);
+      autoCloseMobileSidebar();
       return;
     }
     if (action.kind === "create-note") {
       doCreateNote(action.parentId);
+      autoCloseMobileSidebar();
       return;
     }
   }
@@ -1492,7 +1569,7 @@ export default function App() {
   }, [selection, space.folders]);
 
   /**
-   * 给 NoteInspector 用的"record"视角：只有当前是已持久化 note 时才有 record；
+   * 给 DocumentToolbar 用的"record"视角：只有当前是已持久化 note 时才有 record；
    * 新建 note 时为 null（"尚未保存"）。
    */
   const currentNoteRecord: StoredNoteRecord | null = useMemo(() => {
@@ -1549,6 +1626,34 @@ export default function App() {
    *   - title / markdown 都不应再接受输入。
    */
   const isBlockingSave = saveOverlay !== null;
+
+  /**
+   * banner 优先级判定：
+   *   1. 错误（lastError）—— 最高
+   *   2. 解密失败（decryptError + 当前 note 处于 decryptFailed）
+   *   3. 移动模式（moveState）
+   *   4. 普通提示（空）
+   * 同一时刻只显示最高优先级的一条；带操作按钮（移动模式的"取消"）。
+   */
+  const bannerKind = useMemo<"error" | "decrypt" | "move" | "none">(() => {
+    if (lastError) return "error";
+    if (decryptError && currentEditorState?.decryptFailed) return "decrypt";
+    if (moveState) return "move";
+    return "none";
+  }, [lastError, decryptError, currentEditorState?.decryptFailed, moveState]);
+
+  const bannerMessage = useMemo<string | null>(() => {
+    if (bannerKind === "error") return lastError;
+    if (bannerKind === "decrypt") {
+      return currentEditorState?.decryptFailed
+        ? `当前 note 解密失败：${decryptError}。已锁定编辑；可删除本条或切回原 origin / active key 后重试。`
+        : decryptError;
+    }
+    if (bannerKind === "move") {
+      return "移动模式：点击目标文件夹或根目录完成移动。";
+    }
+    return null;
+  }, [bannerKind, lastError, decryptError, currentEditorState?.decryptFailed]);
 
   /* ============== 切换身份 / 删除当前数据 共用的退出清理 ============== */
 
@@ -1636,6 +1741,8 @@ export default function App() {
   }
 
   // 已登录态：渲染完整 notes 工作区。
+  const sidebarOpen = isSidebarOpenOnMobile !== false; // null / true → 视为展开
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -1644,13 +1751,21 @@ export default function App() {
           <h1>Notes Demo</h1>
           <p>真实调用 <code>identity.get</code> 与 <code>cipher.*</code> 的加密笔记工作区。</p>
         </div>
+        <button
+          type="button"
+          className="app-header__sidebar-toggle"
+          onClick={() => setIsSidebarOpenOnMobile((v) => !(v ?? false))}
+          aria-label={sidebarOpen ? "收起文件树" : "展开文件树"}
+          aria-expanded={sidebarOpen}
+        >
+          {sidebarOpen ? "收起目录" : "目录"}
+        </button>
         <ConnectStatus
           state={popupState}
           currentOrigin={currentOrigin}
           targetOrigin={normalizedTargetOrigin || targetOrigin}
           publicKeyHex={identity?.publicKeyHex ?? null}
           lastLoginAt={identity?.resolvedAt ?? null}
-          lastError={lastError}
           isLoggingIn={isLoggingIn}
           onLogin={() => void handleLogin()}
           onForget={handleSwitchIdentity}
@@ -1658,7 +1773,38 @@ export default function App() {
         />
       </header>
 
-      <main className="workspace">
+      {/*
+        应用级提示 banner：位于 header 与 workspace 之间。
+        设计缘由（施工单 2026-06-27 第 4.7 / 4.8 / 8.1 章）：
+        - 优先级：error > decrypt > move > none；
+        - 同一时刻只显示一条主横条；带操作按钮时只放一个轻量按钮；
+        - saveOverlay 仍走单独的全屏遮罩，不进 banner。
+      */}
+      {bannerKind !== "none" && bannerMessage ? (
+        <div className={`app-banner app-banner--${bannerKind}`} role={bannerKind === "error" ? "alert" : "status"}>
+          <span className="app-banner__text">{bannerMessage}</span>
+          {bannerKind === "move" ? (
+            <button
+              type="button"
+              className="app-banner__action"
+              onClick={handleMoveCancel}
+            >
+              取消
+            </button>
+          ) : null}
+          {bannerKind === "error" ? (
+            <button
+              type="button"
+              className="app-banner__action"
+              onClick={() => setLastError(null)}
+            >
+              知道了
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <main className={`workspace ${sidebarOpen ? "is-sidebar-open" : "is-sidebar-collapsed"}`}>
         <NotesSidebar
           space={viewSpace}
           visibleNoteIds={visibleNoteIds}
@@ -1668,6 +1814,7 @@ export default function App() {
               : null
           }
           selection={selection}
+          currentFolder={currentFolder}
           searchQuery={searchQuery}
           activeTag={activeTag}
           contextMenu={contextMenu}
@@ -1687,20 +1834,41 @@ export default function App() {
           onDragEnd={handleDragEnd}
           onDragOverTarget={handleDragOverTarget}
           onDropOnTarget={handleDropOnTarget}
-          onMoveTarget={handleMoveTarget}
-          onMoveCancel={handleMoveCancel}
           onSearchQueryChange={setSearchQuery}
           onActiveTagChange={setActiveTag}
+          onMoveTarget={handleMoveTarget}
           allTags={allTags}
         />
 
-        <section className="editor-stage">
+        <section className="document-panel">
           {currentEditorState ? (
             <>
-              <div className="editor-stage__header">
+              <DocumentToolbar
+                draft={editorStateToDraft(currentEditorState)}
+                record={currentNoteRecord}
+                decryptFailed={currentEditorState.decryptFailed}
+                isDirty={dirty}
+                isSaving={isBlockingSave}
+                titleError={titleError}
+                canEdit={
+                  !!identity &&
+                  !isLoggingIn &&
+                  !currentEditorState.decryptFailed &&
+                  !currentEditorState.loading &&
+                  !isBlockingSave
+                }
+                canDelete={!!identity && !isLoggingIn && !isBlockingSave}
+                onChangeTags={(tags) =>
+                  setCurrentEditorState((prev) => (prev ? { ...prev, tags } : prev))
+                }
+                onSave={() => void handleSave()}
+                onDelete={() => handleDeleteNote(currentEditorState!.noteId)}
+                onReset={handleReset}
+              />
+              <div className="document-head">
                 <input
                   type="text"
-                  className="editor-stage__filename"
+                  className="document-head__title"
                   value={currentEditorState.title}
                   onChange={(e) =>
                     setCurrentEditorState((prev) =>
@@ -1715,7 +1883,7 @@ export default function App() {
                   }
                   spellCheck={false}
                 />
-                <span className="editor-stage__filename-hint">
+                <span className="document-head__hint">
                   {currentEditorState.kind === "new"
                     ? "新建 note（尚未保存）"
                     : currentEditorState.loading
@@ -1723,23 +1891,29 @@ export default function App() {
                       : "文件名（保存时会写入 note record）"}
                 </span>
               </div>
-              <NoteEditor
-                key={currentEditorState.noteId}
-                markdown={editorMarkdown}
-                editable={editorEditable && !isBlockingSave}
-                decryptFailed={currentEditorState.decryptFailed}
-                onChange={(md) =>
-                  setCurrentEditorState((prev) =>
-                    prev ? { ...prev, markdown: md } : prev
-                  )
-                }
-              />
-              {decryptError ? (
-                <p className="editor-stage__error">解密失败：{decryptError}</p>
-              ) : null}
+              <div className="document-editor">
+                <NoteEditor
+                  key={currentEditorState.noteId}
+                  markdown={editorMarkdown}
+                  editable={editorEditable && !isBlockingSave}
+                  decryptFailed={currentEditorState.decryptFailed}
+                  onChange={(md) =>
+                    setCurrentEditorState((prev) =>
+                      prev ? { ...prev, markdown: md } : prev
+                    )
+                  }
+                />
+              </div>
             </>
+          ) : currentFolder ? (
+            <div className="document-panel__empty">
+              <h2>选中文件夹：{currentFolder.title || "未命名文件夹"}</h2>
+              <p>
+                文件夹操作见左侧工具条。重命名请右键文件夹 → 重命名。
+              </p>
+            </div>
           ) : (
-            <div className="editor-stage__empty">
+            <div className="document-panel__empty">
               <h2>选择或新建一个 note</h2>
               <p>
                 左侧选择文件夹或 note；右键文件夹可新建 / 删除 / 移动；右键 note 可重命名 / 移动 / 删除。
@@ -1747,51 +1921,6 @@ export default function App() {
             </div>
           )}
         </section>
-
-        {currentEditorState ? (
-          <NoteInspector
-            draft={editorStateToDraft(currentEditorState)}
-            record={currentNoteRecord}
-            isDirty={dirty}
-            isSaving={isBlockingSave}
-            titleError={titleError}
-            canEdit={
-              !!identity &&
-              !isLoggingIn &&
-              !currentEditorState.decryptFailed &&
-              !currentEditorState.loading &&
-              !isBlockingSave
-            }
-            canDelete={!!identity && !isLoggingIn && !isBlockingSave}
-            decryptFailed={currentEditorState.decryptFailed}
-            onChangeTitle={(t) =>
-              setCurrentEditorState((prev) => (prev ? { ...prev, title: t } : prev))
-            }
-            onChangeTags={(tags) =>
-              setCurrentEditorState((prev) => (prev ? { ...prev, tags } : prev))
-            }
-            onSave={() => void handleSave()}
-            onDelete={() => handleDeleteNote(currentEditorState!.noteId)}
-            onReset={handleReset}
-          />
-        ) : currentFolder ? (
-          <NoteInspector
-            draft={null}
-            record={null}
-            folder={currentFolder}
-            isDirty={false}
-            isSaving={false}
-            titleError={null}
-            canEdit={!!identity && !isLoggingIn}
-            canDelete={!!identity && !isLoggingIn}
-            decryptFailed={false}
-            onChangeTitle={() => undefined}
-            onChangeTags={() => undefined}
-            onSave={() => undefined}
-            onDelete={() => handleDeleteFolder(currentFolder.id)}
-            onReset={() => undefined}
-          />
-        ) : null}
       </main>
 
       {pendingDialog ? (
@@ -1851,7 +1980,7 @@ export default function App() {
 
 /* ============== 工具 ============== */
 
-/** 把 `CurrentEditorState` 投影成 `NoteDraft`，喂给 NoteInspector / TagInput 等。 */
+/** 把 `CurrentEditorState` 投影成 `NoteDraft`，喂给 DocumentToolbar / TagInput 等。 */
 function editorStateToDraft(state: CurrentEditorState): NoteDraft {
   return {
     noteId: state.noteId,

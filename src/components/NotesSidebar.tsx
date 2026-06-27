@@ -1,7 +1,9 @@
 // src/components/NotesSidebar.tsx
 // 左侧 folder/note 混合树 + 选中 + 右键菜单 + 拖拽。
 //
-// 设计缘由（施工单第 8-10 章 + 2026-06-26 save-switch-current-editor-state）：
+// 设计缘由（施工单第 8-10 章 + 2026-06-26 save-switch-current-editor-state +
+//          2026-06-27 notion-document-toolbar-and-mobile-sidebar
+//          第 4.6 / 4.7 / 5.3 / 8.3 章）：
 //   - 树结构**完全由 `buildTree(folders, notes)` 派生**；组件不做二次假设。
 //   - folder / note 节点都是显式实体，**不**是"path 字符串"。
 //   - 右键菜单：folder 显示"新建笔记 / 新建文件夹 / 重命名 / 删除"；note 显示"重命名 / 删除"。
@@ -9,10 +11,18 @@
 //   - App 持有所有 mutation 真值；组件只触发 `onFolderAction / onNoteAction` 等回调。
 //   - "当前未保存新 note"通过 `ephemeralNoteId` 注入；选中态跟 `selection` 走；
 //     视觉上打 `is-ephemeral` 标记，区别于已落库 note。
+//   - 硬切换后：
+//       - **不再**渲染 sidebar 内的移动模式横条（已挪到 App 的 banner）；
+//       - **不再**接受 `onMoveCancel`——cancel 由 banner 处理；
+//       - 仍然在 tree 节点上打 `is-move-source` / `is-move-mode` 视觉态；
+//       - 当前选中 folder 时，根目录上方渲染"简化 folder 工具条"；
+//       - 当前选中 note / root 时，**不**显示该工具条；
+//       - 不再接受 `moveState` 用于显示内联横条，仅用于节点高亮。
 
 import { useEffect, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { buildTree, type TreeFolderNode, type TreeNoteNode, type TreeRootNode } from "../lib/path";
 import type { StoredNotesSpace } from "../lib/storage";
+import type { StoredFolderRecord } from "../lib/notes";
 
 export type SelectionKind = "folder" | "note" | "root";
 export interface SidebarSelection {
@@ -76,11 +86,23 @@ export interface NotesSidebarProps {
   /** 当前未保存新 note 的 id（如果有）；用于在树上打"临时"标记。 */
   ephemeralNoteId?: string | null;
   selection: SidebarSelection;
+  /**
+   * 当前选中的 folder；为 null 时不渲染"简化 folder 工具条"。
+   * 设计缘由（施工单 2026-06-27 第 4.6.1 / 4.6.2 章）：仅 folder 选中时显示该工具条；
+   * note / root 选中时不显示，避免与 document-toolbar 形成双入口。
+   */
+  currentFolder: StoredFolderRecord | null;
   searchQuery: string;
   activeTag: string | null;
   contextMenu: SidebarContextMenuState | null;
   dragging: DragState | null;
   dropHover: DropHoverState | null;
+  /**
+   * 移动模式状态：用于在 tree 节点上打 `is-move-source` / `is-move-mode` 视觉态，
+   * 以及在点击目标 folder / root 时改走 `onMoveTarget`。
+   * 横条本身已挪到 App 的 banner；cancel 由 banner 按钮处理，本组件**不**再渲染
+   * 内联横条，也**不**再接受 `onMoveCancel` 回调。
+   */
   moveState: MoveState | null;
   ownerLabel: string;
   disabled?: boolean;
@@ -98,8 +120,11 @@ export interface NotesSidebarProps {
   onDropOnTarget: (target: { kind: "folder" | "root"; id: string | null }) => void;
   onSearchQueryChange: (value: string) => void;
   onActiveTagChange: (value: string | null) => void;
+  /**
+   * 移动模式下，用户在 tree 上点击目标 folder / root 时触发；
+   * App 负责真正的 move 校验与落地。
+   */
   onMoveTarget: (target: { kind: "folder" | "root"; id: string | null }) => void;
-  onMoveCancel: () => void;
 }
 
 export function NotesSidebar(props: NotesSidebarProps) {
@@ -151,15 +176,6 @@ export function NotesSidebar(props: NotesSidebarProps) {
         </div>
       </div>
 
-      {props.moveState ? (
-        <div className="sidebar-move-banner" role="status">
-          <span>移动模式：点击目标文件夹或根目录；</span>
-          <button type="button" className="sidebar-move-cancel" onClick={props.onMoveCancel}>
-            取消
-          </button>
-        </div>
-      ) : null}
-
       <div className="sidebar-search">
         <input
           type="text"
@@ -196,6 +212,37 @@ export function NotesSidebar(props: NotesSidebarProps) {
           ))
         )}
       </div>
+
+      {/*
+        简化 folder 工具条：仅在 selection === folder 时显示在根目录上方。
+        设计缘由（施工单 2026-06-27 第 4.6.1 / 4.6.2 / 8.3 章）：
+        - 选中 folder → 显示（标题 + updated + 删除）；
+        - 选中 note / root → 不显示，避免与 document-toolbar 重复形成双入口；
+        - 文档区**不**再放"删除文件夹"，由本工具条承担唯一入口。
+      */}
+      {props.currentFolder ? (
+        <div className="sidebar-folder-toolbar" role="group" aria-label="当前文件夹工具条">
+          <div className="sidebar-folder-toolbar__head">
+            <span className="sidebar-folder-toolbar__eyebrow">当前文件夹</span>
+            <strong className="sidebar-folder-toolbar__title">
+              {props.currentFolder.title || "未命名文件夹"}
+            </strong>
+          </div>
+          <div className="sidebar-folder-toolbar__row">
+            <span className="sidebar-folder-toolbar__meta">
+              updated {new Date(props.currentFolder.updatedAt).toLocaleString()}
+            </span>
+            <button
+              type="button"
+              className="secondary-button sidebar-folder-toolbar__delete"
+              onClick={() => props.onFolderAction({ type: "delete", folderId: props.currentFolder!.id })}
+              disabled={props.disabled}
+            >
+              删除文件夹
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div
         className="sidebar-tree"
@@ -245,7 +292,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
               <div
                 className="sidebar-empty"
                 // 让空树提示块也走 root 语义：点击 → 选中 root；右键 → 弹根目录菜单。
-                // 这是“目录框架里除文件夹/文件/其他控件外，空白都算 root”的兜底。
+                // 这是"目录框架里除文件夹/文件/其他控件外，空白都算 root"的兜底。
                 onClick={() => {
                   if (props.moveState) {
                     props.onMoveTarget({ kind: "root", id: null });
@@ -400,7 +447,7 @@ function FolderNode(props: FolderNodeProps) {
           .filter(Boolean)
           .join(" ")}
         style={{ paddingLeft: `${8 + props.depth * 14}px` }}
-        draggable={!props.moveState}
+        draggable={!props.disabled && !props.moveState}
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", `folder:${node.id}`);
@@ -666,20 +713,12 @@ function ContextMenu(props: ContextMenuProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <li>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => props.onAction("root", "", "create-note")}
-          >
+          <button type="button" role="menuitem" onClick={() => props.onAction("root", "", "create-note")}>
             新建 note
           </button>
         </li>
         <li>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => props.onAction("root", "", "create-folder")}
-          >
+          <button type="button" role="menuitem" onClick={() => props.onAction("root", "", "create-folder")}>
             新建文件夹
           </button>
         </li>
