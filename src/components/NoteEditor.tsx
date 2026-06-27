@@ -20,7 +20,6 @@ import { BlockNoteView } from "@blocknote/mantine";
 import { useCreateBlockNote } from "@blocknote/react";
 import type { BlockNoteEditor } from "@blocknote/core";
 import "@blocknote/mantine/style.css";
-import "@blocknote/core/fonts/inter.css";
 
 export interface NoteEditorProps {
   markdown: string;
