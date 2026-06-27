@@ -5,12 +5,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { applyResolvedAppTheme, loadAppThemePreference, resolveAppTheme } from "./lib/theme";
 import "./styles.css";
 
 const rootEl = document.getElementById("root");
 if (!rootEl) {
   throw new Error("Root element #root not found");
 }
+
+// React 挂载前先同步主题，避免首屏闪到错误的黑/白模式。
+applyResolvedAppTheme(resolveAppTheme(loadAppThemePreference()));
 
 ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>

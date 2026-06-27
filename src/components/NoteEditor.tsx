@@ -26,6 +26,7 @@ export interface NoteEditorProps {
   markdown: string;
   editable: boolean;
   decryptFailed: boolean;
+  theme: "light" | "dark";
   onChange: (markdown: string) => void;
 }
 
@@ -91,7 +92,7 @@ export function NoteEditor(props: NoteEditorProps) {
         editable={props.editable}
         // 默认 slash menu 列表满足 markdown 友好块；不引入 image / table 等。
         slashMenu={slashItems as never}
-        theme="light"
+        theme={props.theme}
       />
     </div>
   );

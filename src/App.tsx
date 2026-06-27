@@ -90,6 +90,14 @@ import {
   type StoredNotesSpace
 } from "./lib/storage";
 import { checkDragLegality, describeDragLegalityReason } from "./lib/path";
+import {
+  applyResolvedAppTheme,
+  getSystemThemeMediaQuery,
+  loadAppThemePreference,
+  resolveSystemTheme,
+  saveAppThemePreference,
+  type AppThemePreference
+} from "./lib/theme";
 import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
 import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState, type SidebarSelection } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
@@ -271,6 +279,12 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  /** 主题偏好三态：白 / 黑 / 跟随系统。 */
+  const [themePreference, setThemePreference] = useState<AppThemePreference>(() =>
+    loadAppThemePreference()
+  );
+  /** 系统黑白态单独镜像，避免 theme=system 时把系统查询逻辑散落到渲染分支。 */
+  const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => resolveSystemTheme());
 
   const [contextMenu, setContextMenu] = useState<SidebarContextMenuState | null>(null);
   const [dragging, setDragging] = useState<
@@ -332,6 +346,12 @@ export default function App() {
     }
   }, [targetOrigin]);
 
+  /** 当前真正生效到页面与编辑器的主题。 */
+  const resolvedTheme = useMemo(
+    () => (themePreference === "system" ? systemTheme : themePreference),
+    [themePreference, systemTheme]
+  );
+
   /* ============== session client 单例 ============== */
 
   function getSessionClient(): PopupSessionClient {
@@ -357,6 +377,28 @@ export default function App() {
       setPopupState("idle");
     }
   }, [targetOrigin]);
+
+  /**
+   * 订阅系统黑白切换。
+   *
+   * 设计缘由：
+   *   - 只有 theme=system 时需要响应，但监听本身保持常驻更简单；
+   *   - 真正是否采用系统值，由 `resolvedTheme` 的 useMemo 决定。
+   */
+  useEffect(() => {
+    const media = getSystemThemeMediaQuery();
+    if (!media) return;
+    const handleChange = () => setSystemTheme(media.matches ? "dark" : "light");
+    handleChange();
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, []);
+
+  /** 主题偏好持久化 + 根节点 dataset 同步。 */
+  useEffect(() => {
+    saveAppThemePreference(themePreference);
+    applyResolvedAppTheme(resolvedTheme);
+  }, [themePreference, resolvedTheme]);
 
   useEffect(() => {
     return () => {
@@ -1760,6 +1802,18 @@ export default function App() {
         >
           {sidebarOpen ? "收起目录" : "目录"}
         </button>
+        <label className="app-header__theme">
+          <span>主题</span>
+          <select
+            value={themePreference}
+            onChange={(e) => setThemePreference(e.target.value as AppThemePreference)}
+            aria-label="选择主题"
+          >
+            <option value="dark">黑</option>
+            <option value="light">白</option>
+            <option value="system">跟随系统</option>
+          </select>
+        </label>
         <ConnectStatus
           state={popupState}
           currentOrigin={currentOrigin}
@@ -1897,6 +1951,7 @@ export default function App() {
                   markdown={editorMarkdown}
                   editable={editorEditable && !isBlockingSave}
                   decryptFailed={currentEditorState.decryptFailed}
+                  theme={resolvedTheme}
                   onChange={(md) =>
                     setCurrentEditorState((prev) =>
                       prev ? { ...prev, markdown: md } : prev
