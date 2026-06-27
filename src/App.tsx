@@ -566,7 +566,7 @@ export default function App() {
     }
 
     const request = buildCipherDecryptRequest({
-      text: "向 Notes Demo 解密该 note 的 markdown 内容",
+      text: `解密 ${record.title} 内容`,
       nonceBase64: record.cipher.nonceBase64,
       cipherbytesBase64: record.cipher.cipherbytesBase64,
       requestId: myRequestId
