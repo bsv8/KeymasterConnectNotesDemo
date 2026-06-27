@@ -249,6 +249,24 @@ record 自身不重复携带 owner。
 - 选中 note：中间打开编辑器，顶部显示文件名输入框；
 - 选中根目录：默认态；新建默认落到根目录下；右侧无 folder / note 焦点时显示"未选中实体"占位。
 
+### 打开 note 解密（硬切换后的产品定义）
+
+- popup session **并行**接受多条 request；transport 不再做"同一时刻只允许
+  一条在途"的 single-flight 限制；
+- 内部执行串行由 Keymaster 自行负责，demo 前端**不**再做 note 打开排队；
+- 用户从未打开的 note A 切到未打开的 note B 时：
+  - 立即对 A 发顶层 `cancel(A.requestId)`（fire-and-forget，不等 ack）；
+  - 立即为 B 发新的 `cipher.decrypt` 请求；
+  - 不论 cancel 是否生效，B 不需要等 A 跑完；
+  - A 晚回来的结果按代际隔离丢弃，不会覆盖 B 的 editor。
+- 用户从 note 切到 folder / root 时同样 cancel 当前 pending decrypt，再清空
+  editorState；
+- 同一 note 重复点击是 no-op（即便处于 loading / decryptFailed 也不自动重试）；
+- save / login 仍按显式按钮触发，不复用 note 打开队列，也不依赖
+  `session_busy` 作为前端控制手段；
+- `cancel` 没有独立 ack；旧请求可能仍按 `request.id` 回结果——UI 一律按
+  "是否仍是当前代际 + 是否仍是当前 note"判定写回。
+
 ### 右键菜单
 
 - 根目录 `/`（含目录框架空白区域 / 空树提示块）：`新建 note / 新建文件夹`；
@@ -298,7 +316,13 @@ record 自身不重复携带 owner。
     不删 Keymaster 身份）→ 确认 → 退回 `LockScreen`；再次登录同一 owner 应看到空树，
     原数据**不**再恢复；
 22. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
-    相同协议）→ 登录 → 应能进入 notes 工作区，与默认 origin 行为一致。
+    相同协议）→ 登录 → 应能进入 notes 工作区，与默认 origin 行为一致；
+23. note 打开链路验收：连续快速点击未解密 note A → B → C，前端应**立即**对
+    A、B 各发一条 `cancel`（在浏览器 devtools / `console.debug` 里能看到
+    `cancel_sent` 日志），并立即为每条目标发新的 `cipher.decrypt`；
+    最终停留在 C 的 editor；A、B 的晚回结果不应出现在 UI 上；
+24. note → folder / root 切换：当前 note 还在 loading 时点 folder / root，
+    应触发 `cancel_sent`、清空 editor、回到 folder / root 占位。
 
 ## 异常行为对照表
 
@@ -306,10 +330,12 @@ record 自身不重复携带 owner。
 |---|---|
 | popup 被浏览器拦截 | 顶栏明确报错；不做自动重试 |
 | `ready_timeout` | 当前 session 作废；用户可手动再试 |
-| `result_timeout` | 当前 request 失败；用户可再次发起 |
+| `result_timeout` | 单条 request 失败；用户可再次发起 |
 | `user_rejected` | UI 明确显示；不写入任何半成功状态 |
 | `active_key_unavailable` | 顶栏显示原因；不写本地 |
 | `decrypt_failed` | note 仍显示；点击进入"无法解密"页；**不**清空密文 |
+| popup 在多个 pending request 存在时被关闭 | transport 批量 reject **全部** pending；只有仍属于"当前 note + 当前代际"的那条会被展示为解密失败，其它一律静默 |
+| 快速切 note 时 `cancel` 被协议忽略（旧请求已 `executing`） | 新 note 仍正常打开；旧请求晚回结果按代际隔离丢弃；**不**把新 note 误标失败 |
 | title（文件名）为空 | 保存前阻断；精确提示 |
 | folder / note 重名 | 保存 / 移动前阻断；提示用户改名或换目标 |
 | 非空文件夹删除 | 弹提示框阻断；不递归强删 |
@@ -367,4 +393,9 @@ src/
 - 不会因为 owner 相同就假定一定能解密；
 - 不做自动重试、自动回退默认 origin、自动修正 URL；
 - 不在登录失败后偷偷保留旧工作区继续可见；
-- 不引入多 provider 管理 / 收藏 / 最近记录。
+- 不引入多 provider 管理 / 收藏 / 最近记录；
+- 不再做 note 打开的串行排队（`openChainRef` 已删除）；
+- 不依赖 `session_busy` / 单 `inFlight` 作为 note 打开链路的前端控制手段；
+- 不把"cancel 已发送"误当成"旧请求一定不会再回结果"；
+- 不在 `executing` 阶段尝试"半取消"或"结果反转"；
+- 不为了"业务完整"顺手引入 note 打开的请求池 / 优先级 / 批处理 / 重试 / 恢复。

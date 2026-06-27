@@ -1,7 +1,9 @@
 // src/App.tsx
 // Notes Demo 页面级状态与编排。
 //
-// 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4-10 章）：
+// 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4-10 章 +
+//          施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
+//          第 4-10 章）：
 //   - 顶层固定二态：`identity === null` 时只渲染 `LockScreen`；已登录才渲染工作区。
 //   - **当前编辑内存态单真值**：整页只允许存在一份"当前正在编辑的内存态"
 //     `currentEditorState`。它同时承担：
@@ -26,6 +28,14 @@
 //   - 退出工作区时统一收口清空内存态（包含 `currentEditorState` / `saveOverlay`）。
 //   - 命名交互：新建文件夹 / 重命名文件夹 / 重命名 note 全部走 `NameInputDialog`；
 //     新建时若重名走自动补编号；重命名时若重名直接阻断。
+//   - **note 打开链路不再串行排队**（施工单 2026-06-27）：
+//       - `openPersistedNote` 不再 `await previous`——切 note 时立即发新 decrypt；
+//       - 旧 pending decrypt 立即 `cancelRequest(oldId)`（fire-and-forget）；
+//       - 业务层只关心"当前打开代际"+"当前正在等的 decrypt requestId"；
+//       - 旧请求晚回来的结果一律丢弃（代际隔离）；
+//       - popup session client 已是 multi-pending，不再有 `session_busy`；
+//       - 当前 note 切到 folder / root / 切换 owner / 退出工作区时，
+//         也要对旧 pending decrypt 发 cancel，并清空代际。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -266,20 +276,28 @@ export default function App() {
    */
   const saveCancelledRef = useRef(false);
   /**
-   * `openPersistedNote` 的串行化链：
-   *   - `PopupSessionClient.runRequest` 一次只允许一条 in-flight；
-   *   - 多次 `openPersistedNote` 并发调用时，**必须**串行排队，否则后续调用会抛
-   *     `session_busy` 并被错误地当成"该 note 解密失败"；
-   *   - 链上每条新 promise 都 `await` 上一个，让 session 一次只跑一个；
-   *   - 完成时通过 `opId` 检查是否已被更新的打开请求取代；过期就丢弃结果。
-   */
-  const openChainRef = useRef<Promise<void>>(Promise.resolve());
-  /**
    * 递增的"当前打开操作"id。每次 `openPersistedNote` 调用都自增并捕获。
    * 异步结果回来时，只有 `openOperationRef.current === myOp` 的那次才允许应用结果；
    * 否则丢弃（用户已切到别的 note，或当前 note 已被更新打开）。
+   *
+   * 切到 folder / root、退出工作区、切换 owner 时也要自增——
+   * 这样任何"晚回来的旧 decrypt"都会落在过期代际上被静默收尾。
    */
   const openOperationRef = useRef(0);
+  /**
+   * 当前正在等待的 decrypt request 引用。
+   * - key 字段（`requestId` / `noteId` / `generation`）让"打开结果回来时"
+   *   能精确判断这一条是否仍是当前代际、是否是当前 note 的请求。
+   * - 切 note 时由新 `openPersistedNote` 覆盖；切 folder / root / 切 owner /
+   *   退出工作区时由 `cancelCurrentPendingDecrypt()` 清空。
+   * - 旧请求被 cancel 后**仍可能**回结果（protocol 没有 ack）；代际隔离保证
+   *   它们不会写回 UI。
+   */
+  const pendingDecryptRef = useRef<{
+    requestId: string;
+    noteId: string;
+    generation: number;
+  } | null>(null);
 
   const normalizedTargetOrigin = useMemo(() => {
     try {
@@ -350,9 +368,9 @@ export default function App() {
       setCurrentEditorState(null);
       setDecryptError(null);
       saveCancelledRef.current = false;
-      // 重置 open 链 / opId：旧 owner 留下的链上 promise 全部过期。
+      // 重置代际 / pending 引用：旧 owner 留下的链上 promise 全部过期。
       openOperationRef.current = 0;
-      openChainRef.current = Promise.resolve();
+      pendingDecryptRef.current = null;
       return;
     }
     const loaded = loadOwnerSpace(identity.publicKeyHex);
@@ -362,7 +380,7 @@ export default function App() {
     setDecryptError(null);
     saveCancelledRef.current = false;
     openOperationRef.current = 0;
-    openChainRef.current = Promise.resolve();
+    pendingDecryptRef.current = null;
   }, [identity?.publicKeyHex]);
 
   /* ============== 日志 ============== */
@@ -451,25 +469,32 @@ export default function App() {
 
   /**
    * 真正落地一次 selection 切换：
-   *   - folder / root：清空 editorState（也清空 selection 的 note 高亮）；
+   *   - folder / root：先 cancel 当前 pending decrypt，再清空 editorState
+   *     （也清空 selection 的 note 高亮）；
    *   - note：打开（已持久化 → 解密 + 装载 baseline；新建态在新建流程里已装载）。
    *   - 同一 note 已在编辑：no-op。
+   *
+   * 设计缘由（施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
+   *          第 5.2 / 6.6 章）：切到非 note 目标时不能省 cancel，否则旧
+   *   decrypt 晚回来会落在"当前没有打开 note"的中间态里飘。
    */
   function applySelection(next: SidebarSelection) {
     setSelection(next);
     if (next.kind !== "note" || next.id === null) {
+      cancelCurrentPendingDecrypt();
       setCurrentEditorState(null);
       setDecryptError(null);
       return;
     }
     const noteId = next.id;
-    // 已在编辑该 note：no-op。
+    // 已在编辑该 note：no-op（包含 loading / decryptFailed 也算 no-op；本单不引入"重试"）。
     if (currentEditorState && currentEditorState.noteId === noteId) {
       return;
     }
     const persisted = space.notes[noteId];
     if (!persisted) {
       // 找不到 record（已被外部删掉等）：回退到 root。
+      cancelCurrentPendingDecrypt();
       setCurrentEditorState(null);
       setSelection({ kind: "root", id: null });
       setDecryptError(null);
@@ -484,34 +509,41 @@ export default function App() {
    * 解密一条已持久化 note 并装载为 `currentEditorState`。
    * 边界：调用前保证 `selection.id === record.id`；调用后 selection / editorState 同步。
    *
-   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 7.6 章）：
-   *   - 这是 hydration 的**唯一**入口；只跑在用户主动切换 note 时。
-   *   - **不**监听 `space.notes` 变化重新触发——保存后的 record 更新不会回灌当前 editor。
-   */
-  /**
-   * 解密一条已持久化 note 并装载为 `currentEditorState`。
-   * 边界：调用前保证 `selection.id === record.id`；调用后 selection / editorState 同步。
-   *
-   * 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 7.6 章 +
-   *          后续修复：快速切换 note 时的 in-flight 竞态）：
+   * 设计缘由（施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
+   *          第 4.1 / 5.1 / 6.1 / 8.4 章）：
    *   - hydration 的**唯一**入口；只跑在用户主动切换 note 时。
    *   - **不**监听 `space.notes` 变化重新触发——保存后的 record 更新不会回灌当前 editor。
-   *   - 串行化：每次调用都进 `openChainRef` 链，`await previous` 让 session
-   *     一次只跑一个；避免后到的请求因 `session_busy` 被错判成"该 note 解密失败"。
-   *   - opId 隔离：每次调用捕获 `myOp = ++openOperationRef.current`；
-   *     异步结果回来时若 `openOperationRef.current !== myOp`，说明用户已经
-   *     切到别的 note、或者重新打开同一 note，**丢弃**结果不写 state。
-   *   - 失败：currentEditorState 锁成 `decryptFailed`，record 保留以供重试；
-   *     但**仅**当本调用还是"最新一次打开"时才写。
+   *   - **不**再串行排队：每次调用立即为该 record 发出独立 decrypt 请求；
+   *     session 允许多 pending 并存，由 Keymaster 内部自行串行执行。
+   *   - **取消旧 decrypt**：进入 loading 占位后，若 `pendingDecryptRef.current`
+   *     仍有上一条 request，立即 `session.cancelRequest(oldId)`（fire-and-forget）；
+   *     不等待 cancel 的 ack，不等待旧请求的 reject / result。
+   *   - **代际隔离**：每次调用捕获 `myOp = ++openOperationRef.current`；
+   *     写入新 `pendingDecryptRef`（包含 requestId / noteId / generation）。
+   *     异步结果回来时只有 `pendingDecryptRef.current` 仍指向本调用
+   *     才允许写 UI；否则静默丢弃。
+   *   - **失败兜底**：currentEditorState 锁成 `decryptFailed`，record 保留以供重试；
+   *     但**仅**当本调用仍是"最新一次打开"时才写。
+   *   - **不在这里 await previous**：避免 B 因 A 没完成而排队——这正是本单
+   *     要消除的旧行为。
    */
   async function openPersistedNote(record: StoredNoteRecord) {
     const myOp = ++openOperationRef.current;
+    const myNoteId = record.id;
+    const myRequestId = makeRequestId();
+    // 捕获上一个 pending decrypt（若有），并立刻把 pending 引用换成新的。
+    const previous = pendingDecryptRef.current;
+    pendingDecryptRef.current = {
+      requestId: myRequestId,
+      noteId: myNoteId,
+      generation: myOp
+    };
     setDecryptError(null);
     // 先填"已锁 / 解密中"的占位 editor state，避免 editor-stage 闪空。
     // `loading: true` 让 `isDirty()` / `canSave` / 标题/标签/正文输入全部锁住，
     // 防止用户在解密完成前误保存"（解密中...）"占位。
     setCurrentEditorState({
-      noteId: record.id,
+      noteId: myNoteId,
       kind: "persisted",
       folderId: record.folderId,
       title: record.title,
@@ -526,42 +558,53 @@ export default function App() {
       decryptFailed: false
     });
 
-    // 串行化：链接本调用；本调用必须等上一个完全跑完才发请求。
-    const previous = openChainRef.current;
-    let release: () => void = () => undefined;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
+    const session = getSessionClient();
+    // 旧 pending decrypt 仍存在 → 立即 fire-and-forget cancel。
+    // cancel 没有 ack，旧请求仍可能晚回来；本调用靠代际隔离丢弃它们。
+    if (previous && previous.requestId !== myRequestId) {
+      session.cancelRequest(previous.requestId);
+    }
+
+    const request = buildCipherDecryptRequest({
+      text: "向 Notes Demo 解密该 note 的 markdown 内容",
+      nonceBase64: record.cipher.nonceBase64,
+      cipherbytesBase64: record.cipher.cipherbytesBase64,
+      requestId: myRequestId
     });
-    openChainRef.current = blocked;
 
     try {
-      await previous;
-      // 等待期间可能被新的打开操作取代；opId 不再是最新就什么都不做。
-      if (openOperationRef.current !== myOp) return;
-
-      const session = getSessionClient();
-      const request = buildCipherDecryptRequest({
-        text: "向 Notes Demo 解密该 note 的 markdown 内容",
-        nonceBase64: record.cipher.nonceBase64,
-        cipherbytesBase64: record.cipher.cipherbytesBase64,
-        requestId: makeRequestId()
-      });
       const response = await session.runRequest(request);
-      // 拿到结果后再次检查：用户可能在 in-flight 期间点了别的 note。
-      if (openOperationRef.current !== myOp) return;
-      // 兜底：当前 currentEditorState 已被更新的打开覆盖；不写回陈旧结果。
-      // 注：`currentEditorState` 在闭包里是组件渲染时捕获的快照；opId 已经覆盖了
-      // 同一时序窗口，但这一行给"读 ref 时序"再上一道保险。
-      if (currentEditorStateRef.current && currentEditorStateRef.current.noteId !== record.id) {
+      // 拿到结果后再校验代际：用户可能已切到别的 note / folder / root / 删掉。
+      if (pendingDecryptRef.current?.requestId !== myRequestId) return;
+      if (pendingDecryptRef.current?.generation !== myOp) return;
+      // 兜底：`currentEditorStateRef.current` 是 commit 后真值。
+      // - 若为 null：用户已离开 note（切 folder/root、删除 note、清空 editor 等）；
+      // - 若 noteId 不匹配：用户已切到别的 note。
+      // 任意一种都意味着"这条 decrypt 已经失去业务价值"，**必须**丢弃，
+      // 不写回 UI。否则会出现"已删除/已切走的 note 被旧 decrypt 重新画出来"。
+      if (!currentEditorStateRef.current || currentEditorStateRef.current.noteId !== myNoteId) {
         return;
       }
+
       if (!response.ok) {
         throw new Error(formatProtocolError(response.error.code, response.error.message));
       }
       const decrypted = parseCipherDecryptResult(response.result as never);
+
+      // 通过校验 + 解析成功：本请求已落地（成功）。清掉 pending 引用，
+      // 避免后续 `cancelCurrentPendingDecrypt` / `openPersistedNote` 把
+      // 已完成的 request 误当成"当前还在等待的 decrypt"再发 cancel。
+      //
+      // **必须**放在 `if (!response.ok)` 与 `parseCipherDecryptResult` **之后**——
+      // 这两步都可能抛错进入下方的 catch；catch 的代际检查依赖
+      // `pendingDecryptRef.current?.requestId === myRequestId` 才能放行并落失败态。
+      // 如果在这里提前清成 null，当前请求自己的协议错误 / 解析异常会被
+      // catch 的同款检查挡掉，`decryptError` 与 `decryptFailed` 都写不出来。
+      pendingDecryptRef.current = null;
+
       // 解密成功：完整装载 baseline，loading 置 false。
       setCurrentEditorState({
-        noteId: record.id,
+        noteId: myNoteId,
         kind: "persisted",
         folderId: record.folderId,
         title: record.title,
@@ -577,13 +620,25 @@ export default function App() {
       });
       setDecryptError(null);
     } catch (err) {
-      if (openOperationRef.current !== myOp) return;
-      if (currentEditorStateRef.current && currentEditorStateRef.current.noteId !== record.id) {
+      // 同样的代际检查：旧请求的 reject / `user_rejected` / `popup_closed`
+      // 不能误标成当前 note 失败——前提是用户已经离开当前 note。
+      //
+      // 注意：这里**不能**假设 `pendingDecryptRef.current` 已被清空——
+      // 成功分支的清空发生在 `parseCipherDecryptResult` 之后；如果当前请求的
+      // 协议错误（`!response.ok`）或 `parseCipherDecryptResult` 抛错，
+      // 这里看到的 `pendingDecryptRef.current.requestId` **仍然是** `myRequestId`，
+      // 代际检查会放行，失败态才能正常写出来。
+      if (pendingDecryptRef.current?.requestId !== myRequestId) return;
+      if (pendingDecryptRef.current?.generation !== myOp) return;
+      if (!currentEditorStateRef.current || currentEditorStateRef.current.noteId !== myNoteId) {
         return;
       }
+      // 通过校验 & 已确认是失败：本请求已落地（失败），清掉 pending 引用。
+      pendingDecryptRef.current = null;
+
       setDecryptError(formatTransportError(err));
       setCurrentEditorState({
-        noteId: record.id,
+        noteId: myNoteId,
         kind: "persisted",
         folderId: record.folderId,
         title: record.title,
@@ -598,8 +653,31 @@ export default function App() {
         decryptFailed: true
       });
       // 注意：**不**清空 record；保留密文以供后续重试。
-    } finally {
-      release();
+    }
+  }
+
+  /**
+   * 取消当前 pending decrypt（如果存在）：
+   *   - 清空 `pendingDecryptRef`；
+   *   - 自增 `openOperationRef`，让任何 in-flight decrypt 落在过期代际；
+   *   - 对旧 requestId 发 `cancelRequest`（fire-and-forget）。
+   *
+   * 使用场景：
+   *   - note → folder / root 切换；
+   *   - 当前 note 被外部删除 / 整个 owner 空间被清空；
+   *   - 退出工作区（额外再 `closeSession()`，transport 批量 reject 兜底）；
+   *   - 切换 owner（同上）。
+   *
+   * **不**用于 note → note 切换——那里由 `openPersistedNote` 自己处理旧请求 cancel。
+   */
+  function cancelCurrentPendingDecrypt() {
+    const old = pendingDecryptRef.current;
+    pendingDecryptRef.current = null;
+    if (openOperationRef.current !== 0 || old) {
+      openOperationRef.current += 1;
+    }
+    if (old) {
+      sessionRef.current?.cancelRequest(old.requestId);
     }
   }
 
@@ -643,9 +721,23 @@ export default function App() {
    *   - 不写 `space.notes`；
    *   - 直接装载 `currentEditorState`（kind: "new"）。
    *   - `selection` 切到新建 note。
+   *
+   * 设计缘由（施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
+   *          第 5.1 / 6.1 / 8.4 章 + 修复轮：
+   *   - `loading` 状态下 `isDirty()` 为 false，`handleCreateNote()` 会绕过
+   *     "保存并切换"遮罩直接走 `doCreateNote()`；这条路径**必须**取消当前
+   *     pending decrypt（否则旧 persisted note 的 decrypt 仍在占着
+   *     `pendingDecryptRef`，晚回来的结果虽因 `noteId` 不匹配被丢弃，但
+   *     pending 引用要拖到下一次别的路径才被清，违反"离开当前 note 立刻
+   *     cancel"的硬切换定义）。
+   *   - 同样适用于"保存并切换 → create-note"路径：saved 状态后已没有 in-flight
+   *     decrypt，但 cancel 是 no-op，不影响功能。
    */
   function doCreateNote(parentId: string | null) {
     if (!identity) return;
+    // 离开当前编辑态（即便 currentEditorState 实际为 `loading` 或 null，
+    // 都要清 pending 引用 + 自增代际 + 对旧 request 发 cancel）。
+    cancelCurrentPendingDecrypt();
     const taken = collectNoteTitlesInFolder(parentId);
     const title = findAvailableName(DEFAULT_NOTE_BASE_NAME, taken);
     const id = cryptoRandomId();
@@ -727,6 +819,10 @@ export default function App() {
       }
       commitSpace(result.next);
       setLastError(null);
+      // 切换到新建的 folder：等价于 note → folder 切换，必须 cancel 当前 pending
+      // decrypt（即便当前不在编辑 note，防御性也补一次）。否则若正在打开某条
+      // note 的 in-flight decrypt 晚回来，会把一个已离开的 note 写回 UI。
+      cancelCurrentPendingDecrypt();
       setSelection({ kind: "folder", id: result.folder.id });
       setCurrentEditorState(null);
       setNameDialog(null);
@@ -833,6 +929,10 @@ export default function App() {
     }
     commitSpace(deleteFolder(space, folderId));
     if (selection.kind === "folder" && selection.id === folderId) {
+      // 切到 root：cancel 当前 pending decrypt（防御性，即便 currentEditorState
+      // 此时通常已是 null）。防止 in-flight 的 decrypt 晚回来把已离开的 note
+      // 写回 UI。
+      cancelCurrentPendingDecrypt();
       setSelection({ kind: "root", id: null });
       setCurrentEditorState(null);
     }
@@ -843,16 +943,23 @@ export default function App() {
     // 当前正在编辑该 note：
     //   - `kind: "persisted"`：**必须**走 storage 真正删掉持久化记录，再清内存态；
     //   - `kind: "new"`：note 还没落库，仅清内存态即可，不动 storage。
+    //
+    // 设计缘由（施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
+    //          第 6.6 / 8.4 章）：
+    //   - 离开当前 note 之前**必须** cancel 当前 pending decrypt，
+    //     否则该 note 的 in-flight decrypt 晚回来会把已删除的 note 重新写回 UI。
     if (currentEditorState && currentEditorState.noteId === noteId) {
       if (currentEditorState.kind === "persisted") {
         if (!space.notes[noteId]) {
           // 异常态：editor 说 persisted 但 storage 里没有——保守起见只清内存态。
+          cancelCurrentPendingDecrypt();
           setCurrentEditorState(null);
           setSelection({ kind: "root", id: null });
           setDecryptError(null);
           setLastError(null);
           return;
         }
+        cancelCurrentPendingDecrypt();
         commitSpace(deleteNote(space, noteId));
         setCurrentEditorState(null);
         setSelection({ kind: "root", id: null });
@@ -861,6 +968,7 @@ export default function App() {
         return;
       }
       // kind === "new"：未持久化，仅清内存态。
+      cancelCurrentPendingDecrypt();
       setCurrentEditorState(null);
       setSelection({ kind: "root", id: null });
       setDecryptError(null);
@@ -871,6 +979,8 @@ export default function App() {
     if (!space.notes[noteId]) return;
     commitSpace(deleteNote(space, noteId));
     if (selection.kind === "note" && selection.id === noteId) {
+      // 防御性：即便 currentEditorState 通常此时已不是该 note，也补一次 cancel。
+      cancelCurrentPendingDecrypt();
       setSelection({ kind: "root", id: null });
       setCurrentEditorState(null);
       setDecryptError(null);
@@ -1444,6 +1554,11 @@ export default function App() {
 
   /**
    * 退出工作区 → 退回 LockScreen 时**统一**收口清空 notes 工作区内存态。
+   *
+   * 设计缘由（施工单 2026-06-27 第 6.5 / 8.4 章）：
+   *   - `closeSession()` 会批量 reject 全部 pending request（含 in-flight decrypt）；
+   *   - 同时清空 `pendingDecryptRef`、把代际归零——保证旧 owner 的 late result
+   *     不会写到新工作区。
    */
   function exitWorkspace() {
     sessionRef.current?.closeSession();
@@ -1464,7 +1579,7 @@ export default function App() {
     setNameDialog(null);
     saveCancelledRef.current = false;
     openOperationRef.current = 0;
-    openChainRef.current = Promise.resolve();
+    pendingDecryptRef.current = null;
     setLastError(null);
     setSearchQuery("");
     setActiveTag(null);

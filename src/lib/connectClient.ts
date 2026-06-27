@@ -1,12 +1,15 @@
 // src/lib/connectClient.ts
 // 协议 transport 底层 helper。
 //
-// 设计缘由（施工单第 6 章）：
-//   - popup 复用策略与现有 demo 对齐：单页只维护一个 popup session client，
-//     同一时刻只允许一条在途 request。
+// 设计缘由（施工单第 6 章 + 2026-06-27 note-open-cancel-and-transport-hard-switch
+//          第 4.2 / 8.2 章）：
+//   - popup 复用策略与现有 demo 对齐：单页只维护一个 popup session client。
 //   - 本文件只暴露 transport 原子：开窗、消息监听、close 轮询、
 //     targetOrigin 校验、消息分发。session 生命周期由 session client 拥有。
-//   - 保留 `result` 派发到 `requestId` 的回调注册；错误码与现有 demo 一致。
+//   - **保留** `result` 派发到 `requestId` 的回调注册：分发器**永远**按
+//     `result.id` 路由，不做"只认最后一条 requestId"的退化。
+//   - `cancel` 是 fire-and-forget，**不**等待 ack；上层不要从分发器
+//     期待 cancel 的回包。
 
 import type {
   PopupConnectionState,
@@ -26,6 +29,7 @@ export type ProtocolLogStage =
   | "result_received"
   | "popup_closed"
   | "closing_received"
+  | "cancel_sent"
   | "busy_rejected"
   | "timeout"
   | "session_closed";

@@ -47,6 +47,21 @@ export interface ProtocolClosingMessage {
   type: "closing";
 }
 
+/**
+ * 顶层 `cancel` 报文：用于告知 popup 取消一条进行中的 request。
+ *
+ * 设计缘由（施工单 2026-06-27 note-open-cancel-and-transport-hard-switch 第 8.1 章）：
+ *   - `cancel` 是顶层 message，**不**属于业务方法（不进 `ProtocolMethod`）；
+ *   - `cancel` 不带独立 `result` 回包——协议层明确"无 ack"，旧请求的
+ *     `result` 仍可能按 `request.id` 回来，前端靠代际隔离丢弃；
+ *   - 不写 `method: "cancel"`。`cancel` 与 `request` 是平级 type。
+ */
+export interface ProtocolCancelMessage {
+  v: typeof PROTOCOL_VERSION;
+  type: "cancel";
+  id: string;
+}
+
 export interface ProtocolRequestMessage<M extends ProtocolMethod = ProtocolMethod> {
   v: typeof PROTOCOL_VERSION;
   type: "request";
@@ -75,7 +90,8 @@ export type ProtocolMessage =
   | ProtocolReadyMessage
   | ProtocolRequestMessage
   | ProtocolResultMessage
-  | ProtocolClosingMessage;
+  | ProtocolClosingMessage
+  | ProtocolCancelMessage;
 
 export type PopupConnectionState = "opening" | "connected" | "disconnected";
 

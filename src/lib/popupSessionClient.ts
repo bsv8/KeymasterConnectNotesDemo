@@ -1,30 +1,44 @@
 // src/lib/popupSessionClient.ts
 // 页面级 popup session client。
 //
-// 设计缘由（施工单第 6 章）：
+// 设计缘由（施工单第 6 章 + 2026-06-27 note-open-cancel-and-transport-hard-switch
+//          第 4.2 / 5.5 / 8.3 章）：
 //   - 同一 demo 页面，对同一 `targetOrigin`，只维护一个 popup 会话。
 //   - 首次 `ensureSession()` 时若没有 popup 句柄就开窗、等一次 `ready`。
 //   - 后续 `runRequest()` 复用现有 popup 句柄：不再 `window.open`。
-//   - 同一时刻只允许**一条在途** request；第二条再点会抛 `session_busy`。
+//   - popup 会话**并行**接受多条 request；不再做"同一时刻只允许一条在途"的
+//     single-flight 限制——Keymaster 自己负责内部串行执行与排队。
+//   - transport 层只保留最薄的 pending request 注册表（key = `request.id`），
+//     用来：
+//       * 把 `result(id)` 分发给对应 promise；
+//       * 给每条 request 单独挂 timeout；
+//       * 在 session 断开时批量 reject。
+//   - 它**不**是业务状态机；不判断"当前 note 是谁"。
+//   - `cancelRequest(id)`：fire-and-forget 顶层 `cancel` 报文，**不**等 ack；
+//     旧请求晚回来的结果由业务层做代际隔离丢弃。
 //   - popup 关闭 / 刷新后，下次 `runRequest()` 重新开窗。
-//   - 不做客户端请求队列；不做自动重试；不做跨 opener 编排。
+//   - 不做客户端业务队列；不做自动重试；不做跨 opener 编排。
 //
 // 这一层拥有：
 //   - 长期 `message` 监听（ResultDispatcher）；
 //   - popup 句柄；
 //   - popup 关闭轮询；
-//   - 连接状态机（`opening` / `connected` / `disconnected`）。
+//   - 连接状态机（`opening` / `connected` / `disconnected`）；
+//   - 最薄的 pending request 注册表（仅做收尾）。
 //
 // 这一层**不**拥有：
 //   - 任何业务方法（identity.get / cipher.*）；
-//   - 任何 UI；只通过回调与日志暴露。
+//   - 任何 UI；只通过回调与日志暴露；
+//   - "当前 note 是谁"的判断（那是业务层的活）。
 
 import type {
   PopupConnectionState,
+  ProtocolCancelMessage,
   ProtocolMethod,
   ProtocolRequestMessage,
   ProtocolResultMessage
 } from "./protocol";
+import { PROTOCOL_VERSION } from "./protocol";
 import {
   ProtocolTransportError,
   buildPopupFeatures,
@@ -70,7 +84,15 @@ export class PopupSessionClient {
   private dispatcher: ReturnType<typeof createResultDispatcher> | null = null;
   private combinedListener: ((event: MessageEvent) => void) | null = null;
   private closePoller: ReturnType<typeof setInterval> | null = null;
-  private inFlight: PendingRequest | null = null;
+  /**
+   * 最薄的 pending request 注册表。
+   * - key = `request.id`；
+   * - value = 该 request 的 resolve / reject / timer。
+   *
+   * 业务层**不**直接读它。业务层只通过 `runRequest()` 拿 promise、通过
+   * `cancelRequest(id)` 触发取消。session 断开时 transport 自己批量 reject。
+   */
+  private pendingRequests: Map<string, PendingRequest> = new Map();
   private env: ProtocolClientEnv;
   private opts: PopupSessionClientOptions;
   private readyPromise: Promise<void> | null = null;
@@ -109,13 +131,11 @@ export class PopupSessionClient {
 
   /**
    * 发送一条 request 并等待 result。会先确保 session ready。
-   * 同时只允许一条在途 request；并发会被立即拒绝。
+   *
+   * 不再因已有 pending 就拒绝——session 允许并行持有任意条 pending request；
+   * 业务层负责"当前 note 是谁"的判断与旧请求淘汰。
    */
   async runRequest<M extends ProtocolMethod>(request: ProtocolRequestMessage<M>): Promise<ProtocolResultMessage> {
-    if (this.inFlight) {
-      this.log("busy_rejected", { requestId: request.id, method: request.method }, "Popup session is busy with another request");
-      throw new ProtocolTransportError("session_busy", "Popup session is busy with another request");
-    }
     await this.ensureSession();
     const targetOrigin = this.currentTargetOrigin!;
     const popup = this.popup!;
@@ -130,12 +150,12 @@ export class PopupSessionClient {
       pending.reject = reject;
       unsubscribe = this.dispatcher!.awaitResult(request.id, (msg) => {
         this.clearResultTimer(pending);
-        this.inFlight = null;
+        this.pendingRequests.delete(request.id);
         this.log("result_received", msg, undefined);
         resolve(msg);
       });
     });
-    this.inFlight = pending;
+    this.pendingRequests.set(request.id, pending);
     try {
       popup.postMessage(request, targetOrigin);
       this.log("request_sent", sanitizeRequest(request), undefined);
@@ -143,13 +163,13 @@ export class PopupSessionClient {
     } catch (err) {
       unsubscribe?.();
       this.clearResultTimer(pending);
-      this.inFlight = null;
+      this.pendingRequests.delete(request.id);
       this.log("busy_rejected", err, "Failed to send request");
       throw new ProtocolTransportError("invalid_origin", err instanceof Error ? err.message : "Failed to send request");
     }
     pending.resultTimer = this.env.setTimeout(() => {
       unsubscribe?.();
-      this.inFlight = null;
+      this.pendingRequests.delete(request.id);
       this.log("timeout", { stage: "result", requestId: request.id }, "result timeout");
       pending.reject(new ProtocolTransportError("result_timeout", "Timed out waiting for result"));
     }, this.opts.resultTimeoutMs);
@@ -157,16 +177,42 @@ export class PopupSessionClient {
   }
 
   /**
-   * 主动关闭 session：清空 pending、解绑 listener、关闭 popup。
+   * 通知 popup 取消一条进行中的 request。
+   *
+   * 语义（施工单第 4.3 / 5.1 / 8.3 章）：
+   *   - fire-and-forget：仅 postMessage 顶层 `cancel`，**不**等 ack；
+   *   - session 不在 `connected` / popup 句柄丢失时直接 no-op；
+   *   - 协议层允许 cancel 被忽略（executing 阶段、id 未命中），上层必须靠
+   *     代际隔离丢弃旧结果，**不**假设 cancel 后旧请求一定消失；
+   *   - 该方法**不**碰 `pendingRequests` 注册表——旧 request 的 promise 由业务层
+   *     通过代际隔离丢弃，timer 自然会在 timeout 时清掉；session 断开时
+   *     由 transport 自己批量 reject。
+   */
+  cancelRequest(id: string): void {
+    if (this.state !== "connected" || !this.popup || !this.currentTargetOrigin) {
+      // session 已经断开：什么都不发，让旧结果走批量 reject 收尾。
+      return;
+    }
+    const cancelMessage: ProtocolCancelMessage = {
+      v: PROTOCOL_VERSION,
+      type: "cancel",
+      id
+    };
+    try {
+      this.popup.postMessage(cancelMessage, this.currentTargetOrigin);
+      this.log("cancel_sent", { requestId: id }, undefined);
+    } catch (err) {
+      // best-effort：吞掉发送失败。
+      this.log("cancel_sent", { requestId: id, error: formatError(err) }, "cancel postMessage failed");
+    }
+  }
+
+  /**
+   * 主动关闭 session：批量 reject 所有 pending、解绑 listener、关闭 popup。
    * 外部再次 `ensureSession()` 时会重新开窗。
    */
   closeSession(): void {
-    if (this.inFlight) {
-      this.clearResultTimer(this.inFlight);
-      const p = this.inFlight;
-      this.inFlight = null;
-      p.reject(new ProtocolTransportError("popup_closed", "Popup session was closed"));
-    }
+    this.rejectAllPending("popup_closed", "Popup session was closed");
     if (this.dispatcher) {
       this.dispatcher.close();
       this.dispatcher = null;
@@ -261,12 +307,7 @@ export class PopupSessionClient {
   }
 
   private handleSessionClosedByServer(_reason: "closing"): void {
-    if (this.inFlight) {
-      this.clearResultTimer(this.inFlight);
-      const p = this.inFlight;
-      this.inFlight = null;
-      p.reject(new ProtocolTransportError("popup_closed", "Popup session ended by server (closing)"));
-    }
+    this.rejectAllPending("popup_closed", "Popup session ended by server (closing)");
     if (this.dispatcher) {
       this.dispatcher.close();
       this.dispatcher = null;
@@ -292,12 +333,7 @@ export class PopupSessionClient {
     this.closePoller = this.env.setInterval(() => {
       if (isPopupClosed(this.popup)) {
         this.log("popup_closed", undefined, undefined);
-        if (this.inFlight) {
-          this.clearResultTimer(this.inFlight);
-          const p = this.inFlight;
-          this.inFlight = null;
-          p.reject(new ProtocolTransportError("popup_closed", "Popup was closed before the protocol completed"));
-        }
+        this.rejectAllPending("popup_closed", "Popup was closed before the protocol completed");
         this.transitionTo("disconnected", "popup_closed");
         if (this.dispatcher) {
           this.dispatcher.close();
@@ -317,6 +353,25 @@ export class PopupSessionClient {
         this.readyPromise = null;
       }
     }, closePollMs);
+  }
+
+  /**
+   * 批量 reject 所有 pending request。
+   * 用于 session 整体作废时（closeSession / 服务端 closing / popup 被用户关闭）。
+   * - 清掉每条的 timer；
+   * - 清空注册表。
+   */
+  private rejectAllPending(
+    code: "popup_closed",
+    message: string
+  ): void {
+    if (this.pendingRequests.size === 0) return;
+    const error = new ProtocolTransportError(code, message);
+    for (const [id, pending] of this.pendingRequests) {
+      this.clearResultTimer(pending);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
   }
 
   private clearResultTimer(p: PendingRequest): void {
@@ -375,4 +430,8 @@ function sanitizeValue(value: unknown): unknown {
     return out;
   }
   return value;
+}
+
+function formatError(err: unknown): string {
+  return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 }
