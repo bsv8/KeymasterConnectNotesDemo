@@ -2,7 +2,8 @@
 // 搜索结果页：右侧文档区在 `isSearchMode` 下渲染此组件。
 //
 // 设计缘由（施工单 2026-06-27 note-search-results-and-tree-expand-persistence
-//          第 4.2 / 4.3 / 4.5 / 7.3 章）：
+//          第 4.2 / 4.3 / 4.5 / 7.3 章 +
+//          施工单 2026-06-27 005-i18n-header-language-switch 8.12 章）：
 //   - 树只负责树；搜索只负责结果。
 //   - 结果集合**只**包含 note（不含 folder）。
 //   - 结果项固定两行：
@@ -16,9 +17,12 @@
 //   - 空结果时显示明确的"无结果"页，明确当前搜索条件来源：
 //       - 关键词；
 //       - tag。
+//   - 所有用户可见文案走 i18n 字典；结果数文本支持插值。
 
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { StoredNoteRecord } from "../lib/notes";
+import { useI18n } from "../i18n/useI18n";
+import type { SupportedLanguage } from "../i18n/types";
 
 export interface SearchResultItem {
   /** note record 的 id。 */
@@ -40,9 +44,12 @@ export interface SearchResultsPanelProps {
   results: SearchResultItem[];
   /** 点击结果项时回调；App 走 `trySelect`。 */
   onSelect: (id: string) => void;
+  /** 当前语言；用于将 pathLabel 在需要时跟随语言格式化（当前实现不依赖，但保留接口便于扩展）。 */
+  language: SupportedLanguage;
 }
 
 export function SearchResultsPanel(props: SearchResultsPanelProps) {
+  const { t } = useI18n();
   const { searchQuery, activeTag, results } = props;
   const hasQuery = searchQuery.trim().length > 0;
   const hasTag = activeTag !== null;
@@ -51,28 +58,28 @@ export function SearchResultsPanel(props: SearchResultsPanelProps) {
   return (
     <div className="search-results">
       <header className="search-results__header">
-        <span className="search-results__eyebrow">搜索结果</span>
+        <span className="search-results__eyebrow">{t("search.eyebrow")}</span>
         <h2 className="search-results__title">
           {totalCount > 0
-            ? `共 ${totalCount} 条结果`
+            ? t("search.title.hasResults", { count: totalCount })
             : hasQuery || hasTag
-              ? "无匹配结果"
-              : "请输入关键词或选择 tag"}
+              ? t("search.title.noResults")
+              : t("search.title.noInput")}
         </h2>
         <p className="search-results__filters">
           {hasQuery ? (
             <span className="search-results__chip">
-              关键词：<strong>{searchQuery.trim()}</strong>
+              {t("search.filter.keyword")}：<strong>{searchQuery.trim()}</strong>
             </span>
           ) : null}
           {hasTag ? (
             <span className="search-results__chip">
-              tag：<strong>#{activeTag}</strong>
+              {t("search.filter.tag")}：<strong>#{activeTag}</strong>
             </span>
           ) : null}
           {!hasQuery && !hasTag ? (
             <span className="search-results__hint">
-              左侧搜索框 / tag 按钮会驱动此页。
+              {t("search.filter.hint")}
             </span>
           ) : null}
         </p>
@@ -81,7 +88,7 @@ export function SearchResultsPanel(props: SearchResultsPanelProps) {
       {totalCount === 0 ? (
         <div className="search-results__empty">
           <p>
-            当前条件下没有匹配的 note。请尝试更换关键词或清空 tag 过滤。
+            {t("search.empty.description")}
           </p>
         </div>
       ) : (
@@ -105,6 +112,7 @@ interface ResultRowProps {
 }
 
 function ResultRow(props: ResultRowProps) {
+  const { t } = useI18n();
   const { item, onSelect } = props;
   const handleClick = (e: ReactMouseEvent) => {
     e.preventDefault();
@@ -118,7 +126,7 @@ function ResultRow(props: ResultRowProps) {
         onClick={handleClick}
       >
         <span className="search-results__item-title">
-          {item.title || "未命名 note"}
+          {item.title || t("search.item.titleFallback")}
         </span>
         <span className="search-results__item-path">{item.pathLabel}</span>
       </button>

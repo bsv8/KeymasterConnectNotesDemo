@@ -20,6 +20,7 @@ import { BlockNoteView } from "@blocknote/mantine";
 import { useCreateBlockNote } from "@blocknote/react";
 import type { BlockNoteEditor } from "@blocknote/core";
 import "@blocknote/mantine/style.css";
+import { useI18n } from "../i18n/useI18n";
 
 export interface NoteEditorProps {
   markdown: string;
@@ -70,15 +71,13 @@ export function NoteEditor(props: NoteEditorProps) {
   const slashItems = useMemo(() => undefined, []);
 
   if (props.decryptFailed) {
+    const { t } = useI18n();
     return (
       <div className="editor editor-failed">
         <div className="editor-failed__box">
-          <h3>无法解密</h3>
-          <p>
-            此 note 的密文无法被当前 origin / 当前 active key 解开。可能原因：
-            origin 切换、active key 切换、密文损坏。
-          </p>
-          <p>note 仍然保留；可查看元数据但无法编辑正文。</p>
+          <h3>{t("editor.decryptFailed.title")}</h3>
+          <p>{t("editor.decryptFailed.reason")}</p>
+          <p>{t("editor.decryptFailed.note")}</p>
         </div>
       </div>
     );

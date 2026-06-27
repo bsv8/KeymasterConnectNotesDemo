@@ -12,6 +12,7 @@
 //   - 取消 / 关闭时不改任何外部状态。
 
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "../i18n/useI18n";
 
 export interface NameInputDialogProps {
   /** 弹层标题，例如 "新建文件夹" / "重命名文件夹"。 */
@@ -39,6 +40,7 @@ export interface NameInputDialogProps {
 }
 
 export function NameInputDialog(props: NameInputDialogProps) {
+  const { t } = useI18n();
   const [value, setValue] = useState(props.initialValue);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -74,7 +76,7 @@ export function NameInputDialog(props: NameInputDialogProps) {
   function tryConfirm() {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
-      setError("名称不能为空。");
+      setError(t("nameDialog.error.empty"));
       return;
     }
     const inline = props.validate?.(trimmed);
@@ -143,14 +145,14 @@ export function NameInputDialog(props: NameInputDialogProps) {
             className="secondary-button"
             onClick={props.onCancel}
           >
-            {props.cancelLabel ?? "取消"}
+            {props.cancelLabel ?? t("action.cancel")}
           </button>
           <button
             type="button"
             className="primary-button"
             onClick={tryConfirm}
           >
-            {props.confirmLabel ?? "确认"}
+            {props.confirmLabel ?? t("action.confirm")}
           </button>
         </div>
       </div>

@@ -86,13 +86,21 @@ export type TitleValidationResult =
 /**
  * 校验 title：trim 后必须非空。
  * 这是施工单要求的唯一底线；不再限制字符集 / 长度 / 路径合法。
+ *
+ * 设计缘由（施工单 2026-06-27 005-i18n-header-language-switch 8.17 章）：
+ *   - `message` 字段**故意保留**但由调用方在 UI 层翻译；
+ *   - 这里只产出稳定的 `code: "empty"`，UI 层按 code 选文案；
+ *   - 默认 message 仍保留**非中文**兜底字符串（"Title is empty."），
+ *     避免在 i18n 未挂载的旧调用方路径上显示中文真值。
+ *   - 真正的展示文案在 `App.tsx` 的 titleError 路径上由 `t("app.error.cannotSaveTitleConflict")`
+ *     + 真实校验文案组合后呈现；底层不再泄漏中文。
  */
 export function validateTitle(raw: string): TitleValidationResult {
   const trimmed = (raw ?? "").trim();
   if (trimmed.length === 0) {
     return {
       ok: false,
-      failure: { code: "empty", message: "标题（文件名）不能为空。" }
+      failure: { code: "empty", message: "Title is empty." }
     };
   }
   return { ok: true, title: trimmed };

@@ -1,7 +1,8 @@
 // src/components/SaveOverlayDialog.tsx
 // 保存阻塞遮罩：等待 Keymaster 完成保存许可的页面级模态。
 //
-// 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.3 / 7.1 章）：
+// 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 5.3 / 7.1 章 +
+//          施工单 2026-06-27 005-i18n-header-language-switch 8.14 章）：
 //   - 整页进入阻塞态：背后页面半透明、不可继续编辑；
 //   - 两种 mode 对应不同的按钮集合：
 //       - `mode: "save"`：只有 `取消`；
@@ -9,10 +10,11 @@
 //   - 中央提示区分"主动保存"与"保存并切换"两种触发原因；
 //   - 遮罩点不到，Esc 不取消（避免用户误关——save 一旦提交就交给 Keymaster 协议去处理）；
 //     想退出只能点"取消"按钮，由 App 决定是否丢弃/不切换。
-//
-// 不在弹层内部维护业务状态；所有动作由 App 通过 props 注入。
+//   - 不在弹层内部维护业务状态；所有动作由 App 通过 props 注入。
+//   - 所有用户可见文案走 i18n 字典。
 
 import { useEffect } from "react";
+import { useI18n } from "../i18n/useI18n";
 
 export interface SaveOverlayDialogProps {
   mode: "save" | "save-and-switch";
@@ -23,6 +25,7 @@ export interface SaveOverlayDialogProps {
 }
 
 export function SaveOverlayDialog(props: SaveOverlayDialogProps) {
+  const { t } = useI18n();
   // Esc 不取消遮罩——这是与 `NameInputDialog` / `confirm-dialog` 故意不同的语义。
   // 原因：用户一旦点 save 进入了 popup 流程，关闭遮罩不会取消已经在飞的协议；
   // 反而会让 UI 跟协议状态分裂。Esc 故意 no-op。
@@ -31,11 +34,11 @@ export function SaveOverlayDialog(props: SaveOverlayDialogProps) {
   }, []);
 
   const title =
-    props.mode === "save" ? "等待 Keymaster 完成保存许可" : "保存当前修改后再切换";
+    props.mode === "save" ? t("saveOverlay.title.save") : t("saveOverlay.title.saveAndSwitch");
   const description =
     props.mode === "save"
-      ? "正在向 Keymaster 请求加密保存。完成前请到弹出的窗口里完成许可操作；可随时取消。"
-      : "切到目标之前，需要先把当前 note 的未保存修改加密保存。请到弹出的窗口里完成许可。";
+      ? t("saveOverlay.description.save")
+      : t("saveOverlay.description.saveAndSwitch");
 
   return (
     <div className="save-overlay" role="dialog" aria-modal="true" aria-labelledby="save-overlay-title">
@@ -53,14 +56,14 @@ export function SaveOverlayDialog(props: SaveOverlayDialogProps) {
                 className="primary-button"
                 onClick={props.onSaveAndSwitch}
               >
-                保存并切换
+                {t("saveOverlay.action.saveAndSwitch")}
               </button>
               <button
                 type="button"
                 className="secondary-button"
                 onClick={props.onCancel}
               >
-                取消
+                {t("saveOverlay.action.cancel")}
               </button>
             </>
           ) : (
@@ -69,7 +72,7 @@ export function SaveOverlayDialog(props: SaveOverlayDialogProps) {
               className="secondary-button"
               onClick={props.onCancel}
             >
-              取消
+              {t("saveOverlay.action.cancel")}
             </button>
           )}
         </div>

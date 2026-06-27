@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MAX_TAGS_PER_NOTE, MAX_TAG_LENGTH, normalizeTags, splitTagTokens } from "../lib/notes";
+import { useI18n } from "../i18n/useI18n";
 
 export interface TagInputProps {
   /** 已提交的 tag 数组（业务真值）。 */
@@ -25,6 +26,7 @@ export interface TagInputProps {
 }
 
 export function TagInput(props: TagInputProps) {
+  const { t } = useI18n();
   const [inputValue, setInputValue] = useState("");
   // IME composition 状态：中文 / 日文等输入法在按下回车时表示"确认候选"，不是"提交"。
   const [isComposing, setIsComposing] = useState(false);
@@ -180,7 +182,7 @@ export function TagInput(props: TagInputProps) {
             <button
               type="button"
               className="tag-chip__remove"
-              aria-label={`删除 tag ${tag}`}
+              aria-label={t("tag.remove.aria", { tag })}
               onClick={(e) => {
                 e.stopPropagation();
                 handleRemove(idx);
@@ -206,13 +208,13 @@ export function TagInput(props: TagInputProps) {
           autoComplete="off"
           placeholder={
             props.value.length === 0
-              ? props.placeholder ?? `输入 tag，回车提交（最多 ${MAX_TAGS_PER_NOTE} 个）`
+              ? props.placeholder ?? `${t("tag.placeholder")}${t("tag.placeholder.maxSuffix", { max: MAX_TAGS_PER_NOTE })}`
               : ""
           }
         />
       </div>
       <p className="tag-input__hint">
-        回车 / 半角逗号 / 全角逗号 / 空格 提交；最多 {MAX_TAGS_PER_NOTE} 个，每个 ≤ {MAX_TAG_LENGTH} 字符。
+        {t("tag.hint", { maxTags: MAX_TAGS_PER_NOTE, maxLength: MAX_TAG_LENGTH })}
       </p>
     </div>
   );

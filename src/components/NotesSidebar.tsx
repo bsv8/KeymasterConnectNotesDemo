@@ -53,6 +53,7 @@ import {
 import { buildTree, type TreeFolderNode, type TreeNoteNode } from "../lib/path";
 import type { StoredNotesSpace } from "../lib/storage";
 import type { StoredFolderRecord, StoredNoteRecord } from "../lib/notes";
+import { useI18n } from "../i18n/useI18n";
 
 export type SelectionKind = "folder" | "note" | "root";
 export interface SidebarSelection {
@@ -163,6 +164,7 @@ export interface NotesSidebarProps {
 }
 
 export function NotesSidebar(props: NotesSidebarProps) {
+  const { t, language } = useI18n();
   const tree = buildTree(props.space.folders, props.space.notes);
   const currentNote: StoredNoteRecord | null =
     props.selection.kind === "note" && props.selection.id !== null
@@ -176,36 +178,36 @@ export function NotesSidebar(props: NotesSidebarProps) {
   const selectionInfo =
     props.currentFolder !== null
       ? {
-          eyebrow: "当前文件夹",
-          title: props.currentFolder.title || "未命名文件夹",
-          meta: `updated ${new Date(props.currentFolder.updatedAt).toLocaleString()}`,
-          actionLabel: "删除文件夹",
+          eyebrow: t("sidebar.toolbar.eyebrow.folder"),
+          title: props.currentFolder.title || t("sidebar.toolbar.title.fallbackFolder"),
+          meta: t("sidebar.toolbar.meta.updated", { time: new Date(props.currentFolder.updatedAt).toLocaleString(language) }),
+          actionLabel: t("sidebar.toolbar.action.deleteFolder"),
           actionDisabled: !!props.disabled,
           onAction: () => props.onFolderAction({ type: "delete", folderId: props.currentFolder!.id })
         }
       : currentNote !== null
         ? {
-            eyebrow: "当前文件",
-            title: currentNote.title || "未命名文件",
-            meta: `updated ${new Date(currentNote.updatedAt).toLocaleString()}`,
-            actionLabel: "当前是文件",
+            eyebrow: t("sidebar.toolbar.eyebrow.note"),
+            title: currentNote.title || t("sidebar.toolbar.title.fallbackNote"),
+            meta: t("sidebar.toolbar.meta.updated", { time: new Date(currentNote.updatedAt).toLocaleString(language) }),
+            actionLabel: t("sidebar.toolbar.action.noteStatic"),
             actionDisabled: true,
             onAction: undefined
           }
         : props.selection.kind === "note"
           ? {
-              eyebrow: "当前文件",
-              title: "未保存文件",
-              meta: "该文件尚未落库",
-              actionLabel: "当前是文件",
+              eyebrow: t("sidebar.toolbar.eyebrow.noteUnsaved"),
+              title: t("sidebar.toolbar.title.unsaved"),
+              meta: t("sidebar.toolbar.meta.unsaved"),
+              actionLabel: t("sidebar.toolbar.action.noteStatic"),
               actionDisabled: true,
               onAction: undefined
             }
         : {
-            eyebrow: "当前选择",
-            title: "根目录",
-            meta: "当前未选择文件夹或文件",
-            actionLabel: "无文件夹可删",
+            eyebrow: t("sidebar.toolbar.eyebrow.root"),
+            title: t("sidebar.toolbar.title.root"),
+            meta: t("sidebar.toolbar.meta.root"),
+            actionLabel: t("sidebar.toolbar.action.rootStatic"),
             actionDisabled: true,
             onAction: undefined
           };
@@ -224,8 +226,8 @@ export function NotesSidebar(props: NotesSidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-title">
-          <span className="sidebar-eyebrow">Notes</span>
-          <strong>{props.ownerLabel || "未登录"}</strong>
+          <span className="sidebar-eyebrow">{t("sidebar.owner.eyebrow")}</span>
+          <strong>{props.ownerLabel || t("sidebar.owner.empty")}</strong>
         </div>
         <div className="sidebar-header__actions">
           <button
@@ -233,18 +235,18 @@ export function NotesSidebar(props: NotesSidebarProps) {
             className="sidebar-new"
             onClick={props.onCreateNote}
             disabled={props.disabled || !props.ownerLabel}
-            title="在当前选中位置新建 note"
+            title={t("sidebar.action.newNote.title")}
           >
-            + note
+            {t("sidebar.action.newNote")}
           </button>
           <button
             type="button"
             className="sidebar-new"
             onClick={props.onCreateFolder}
             disabled={props.disabled || !props.ownerLabel}
-            title="在当前选中位置新建文件夹"
+            title={t("sidebar.action.newFolder.title")}
           >
-            + 文件夹
+            {t("sidebar.action.newFolder")}
           </button>
         </div>
       </div>
@@ -252,24 +254,24 @@ export function NotesSidebar(props: NotesSidebarProps) {
       <div className="sidebar-search">
         <input
           type="text"
-          placeholder="按文件名搜索"
+          placeholder={t("sidebar.search.placeholder")}
           value={props.searchQuery}
           onChange={(e) => props.onSearchQueryChange(e.target.value)}
           disabled={props.disabled}
         />
       </div>
 
-      <div className="sidebar-tags" role="group" aria-label="tag 过滤">
+      <div className="sidebar-tags" role="group" aria-label={t("sidebar.tags.aria")}>
         <button
           type="button"
           className={`sidebar-tag ${props.activeTag === null ? "is-active" : ""}`}
           onClick={() => props.onActiveTagChange(null)}
           disabled={props.disabled}
         >
-          全部
+          {t("sidebar.tag.all")}
         </button>
         {props.allTags.length === 0 ? (
-          <span className="sidebar-tag sidebar-tag-empty">无 tag</span>
+          <span className="sidebar-tag sidebar-tag-empty">{t("sidebar.tag.empty")}</span>
         ) : (
           props.allTags.map((tag) => (
             <button
@@ -278,7 +280,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
               className={`sidebar-tag ${props.activeTag === tag ? "is-active" : ""}`}
               onClick={() => props.onActiveTagChange(tag === props.activeTag ? null : tag)}
               disabled={props.disabled}
-              title={`仅显示含 #${tag} 的 note`}
+              title={t("sidebar.tag.title", { tag })}
             >
               #{tag}
             </button>
@@ -293,7 +295,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
         - root：根目录 + 占位说明 + 禁用占位文案。
         设计缘由：保持 sidebar 栏目高度稳定，但不靠写死高度。
       */}
-      <div className="sidebar-folder-toolbar" role="group" aria-label="当前选择信息">
+      <div className="sidebar-folder-toolbar" role="group" aria-label={t("sidebar.toolbar.aria")}>
         <div className="sidebar-folder-toolbar__head">
           <span className="sidebar-folder-toolbar__eyebrow">{selectionInfo.eyebrow}</span>
           <strong className="sidebar-folder-toolbar__title">{selectionInfo.title}</strong>
@@ -352,8 +354,8 @@ export function NotesSidebar(props: NotesSidebarProps) {
                 props.onContextMenu({ kind: "root", x: e.clientX, y: e.clientY });
               }}
             >
-              <span className="tree-root-label">/</span>
-              <span className="tree-root-name">根目录</span>
+              <span className="tree-root-label">{t("sidebar.root.label")}</span>
+              <span className="tree-root-name">{t("sidebar.root.name")}</span>
             </RootDropZone>
             {props.space.folders && Object.keys(props.space.folders).length === 0 && Object.keys(props.space.notes).length === 0 ? (
               <div
@@ -373,7 +375,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
                   props.onContextMenu({ kind: "root", x: e.clientX, y: e.clientY });
                 }}
               >
-                尚未创建任何内容
+                {t("sidebar.empty.noContent")}
               </div>
             ) : (
               <>
@@ -424,7 +426,7 @@ export function NotesSidebar(props: NotesSidebarProps) {
             )}
           </>
         ) : (
-          <div className="sidebar-empty">请先登录</div>
+          <div className="sidebar-empty">{t("sidebar.empty.pleaseLogin")}</div>
         )}
       </div>
 
@@ -487,6 +489,7 @@ interface FolderNodeProps {
 }
 
 function FolderNode(props: FolderNodeProps) {
+  const { t } = useI18n();
   const { node } = props;
   const isHover = props.dropHover?.kind === "folder" && props.dropHover.id === node.id;
   const isDragging = props.dragging?.kind === "folder" && props.dragging.id === node.id;
@@ -585,7 +588,7 @@ function FolderNode(props: FolderNodeProps) {
         <button
           type="button"
           className="tree-item__expand"
-          aria-label={props.isExpanded ? "折叠文件夹" : "展开文件夹"}
+          aria-label={props.isExpanded ? t("sidebar.expand.collapseFolder") : t("sidebar.expand.expandFolder")}
           onClick={handleToggleClick}
         >
           <ExpandChevron expanded={props.isExpanded} />
@@ -593,7 +596,7 @@ function FolderNode(props: FolderNodeProps) {
         <span className="tree-item__icon" aria-hidden="true">
           <FolderIcon expanded={props.isExpanded} />
         </span>
-        <span className="tree-item__label">{node.title || "未命名文件夹"}</span>
+        <span className="tree-item__label">{node.title || t("sidebar.placeholder.folder")}</span>
       </div>
       {props.isExpanded ? (
         <>
@@ -662,12 +665,14 @@ interface NoteRowProps {
 
 function NoteRow(props: NoteRowProps) {
   const { node } = props;
+  const { t } = useI18n();
   const isDragging = props.dragging?.kind === "note" && props.dragging.id === node.id;
   const handleContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
     props.onContextMenu({ kind: "note", noteId: node.id, x: event.clientX, y: event.clientY });
   };
+  const fallbackTitle = t("sidebar.placeholder.note");
   return (
     <button
       type="button"
@@ -695,17 +700,17 @@ function NoteRow(props: NoteRowProps) {
       onDragEnd={() => props.onDragEnd()}
       onClick={props.onSelect}
       onContextMenu={handleContextMenu}
-      title={props.ephemeral ? `${node.title || "未命名 note"}（未保存）` : node.title}
+      title={props.ephemeral ? t("sidebar.note.titleUnsaved", { title: node.title || fallbackTitle }) : (node.title || fallbackTitle)}
     >
       {/* note 节点没有"开合"概念——前面留一个等宽 placeholder 让 label 对齐 folder 行。 */}
       <span className="tree-item__expand-spacer" aria-hidden="true" />
       <span className="tree-item__icon" aria-hidden="true">
         <NoteIcon />
       </span>
-      <span className="tree-item__label">{node.title || "未命名 note"}</span>
+      <span className="tree-item__label">{node.title || fallbackTitle}</span>
       {props.ephemeral ? (
         <span className="tree-item__badge" aria-hidden="true">
-          未保存
+          {t("sidebar.note.unsavedBadge")}
         </span>
       ) : null}
     </button>
@@ -862,6 +867,7 @@ function ContextMenu(props: ContextMenuProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [props.state, props]);
 
+  const { t } = useI18n();
   if (!props.state) return null;
   const { state } = props;
   // 视口边界保护：超过右下边界时回退到视口内。
@@ -882,7 +888,7 @@ function ContextMenu(props: ContextMenuProps) {
             role="menuitem"
             onClick={() => props.onAction("folder", state.folderId, "create-note")}
           >
-            新建 note
+            {t("sidebar.action.newNote")}
           </button>
         </li>
         <li>
@@ -891,7 +897,7 @@ function ContextMenu(props: ContextMenuProps) {
             role="menuitem"
             onClick={() => props.onAction("folder", state.folderId, "create-folder")}
           >
-            新建文件夹
+            {t("sidebar.action.newFolder")}
           </button>
         </li>
         <li>
@@ -900,7 +906,7 @@ function ContextMenu(props: ContextMenuProps) {
             role="menuitem"
             onClick={() => props.onAction("folder", state.folderId, "rename")}
           >
-            重命名
+            {t("sidebar.context.rename")}
           </button>
         </li>
         <li>
@@ -909,7 +915,7 @@ function ContextMenu(props: ContextMenuProps) {
             role="menuitem"
             onClick={() => props.onAction("folder", state.folderId, "move")}
           >
-            移动…
+            {t("sidebar.context.move")}
           </button>
         </li>
         <li className="context-menu__danger">
@@ -918,7 +924,7 @@ function ContextMenu(props: ContextMenuProps) {
             role="menuitem"
             onClick={() => props.onAction("folder", state.folderId, "delete")}
           >
-            删除
+            {t("sidebar.context.delete")}
           </button>
         </li>
       </ul>
@@ -934,12 +940,12 @@ function ContextMenu(props: ContextMenuProps) {
       >
         <li>
           <button type="button" role="menuitem" onClick={() => props.onAction("root", "", "create-note")}>
-            新建 note
+            {t("sidebar.action.newNote")}
           </button>
         </li>
         <li>
           <button type="button" role="menuitem" onClick={() => props.onAction("root", "", "create-folder")}>
-            新建文件夹
+            {t("sidebar.action.newFolder")}
           </button>
         </li>
       </ul>
@@ -954,17 +960,17 @@ function ContextMenu(props: ContextMenuProps) {
     >
       <li>
         <button type="button" role="menuitem" onClick={() => props.onAction("note", state.noteId, "rename")}>
-          重命名
+          {t("sidebar.context.rename")}
         </button>
       </li>
       <li>
         <button type="button" role="menuitem" onClick={() => props.onAction("note", state.noteId, "move")}>
-          移动…
+          {t("sidebar.context.move")}
         </button>
       </li>
       <li className="context-menu__danger">
         <button type="button" role="menuitem" onClick={() => props.onAction("note", state.noteId, "delete")}>
-          删除
+          {t("sidebar.context.delete")}
         </button>
       </li>
     </ul>

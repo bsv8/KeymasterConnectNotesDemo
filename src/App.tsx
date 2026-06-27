@@ -111,8 +111,8 @@ import {
   buildTree,
   checkDragLegality,
   collectNotesInTreeOrder,
-  describeDragLegalityReason,
-  folderPathLabel
+  folderPathSegments,
+  type DragLegalityFailureCode
 } from "./lib/path";
 import {
   applyResolvedAppTheme,
@@ -134,10 +134,8 @@ import { LockScreen } from "./components/LockScreen";
 import { NameInputDialog } from "./components/NameInputDialog";
 import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
 import { SearchResultsPanel, buildSearchResults } from "./components/SearchResultsPanel";
-
-/** 新建 note / folder 的默认基名（自动补编号时按 "基名 N" 递增）。 */
-const DEFAULT_NOTE_BASE_NAME = "新 note";
-const DEFAULT_FOLDER_BASE_NAME = "新文件夹";
+import { LANGUAGE_DISPLAY, SUPPORTED_LANGUAGES } from "./i18n/types";
+import { useI18n } from "./i18n/useI18n";
 
 const DEFAULT_TARGET_ORIGIN = "https://keymaster.cc";
 const READY_TIMEOUT_MS = 10_000;
@@ -267,6 +265,7 @@ interface NameDialogState {
 
 export default function App() {
   const currentOrigin = typeof window === "undefined" ? "" : window.location.origin;
+  const { language, t, setLanguage } = useI18n();
 
   /* ============== 状态真值 ============== */
 
@@ -348,6 +347,10 @@ export default function App() {
    *   选中 root / folder / note 后自动收起；用户可再次手动展开。
    */
   const [isSidebarOpenOnMobile, setIsSidebarOpenOnMobile] = useState<boolean | null>(null);
+
+  /** 新建 note / folder 的默认基名（按当前语言；自动补编号时按 "基名 N" 递增）。 */
+  const DEFAULT_NOTE_BASE_NAME = t("app.defaultNoteBaseName");
+  const DEFAULT_FOLDER_BASE_NAME = t("app.defaultFolderBaseName");
 
   const sessionRef = useRef<PopupSessionClient | null>(null);
   /**
@@ -585,7 +588,7 @@ export default function App() {
 
   const handleLogin = useCallback(async () => {
     if (!normalizedTargetOrigin) {
-      setLastError("Target origin 非法。");
+      setLastError(t("app.error.targetOriginInvalid"));
       return;
     }
     setIsLoggingIn(true);
@@ -595,13 +598,13 @@ export default function App() {
       const requestId = makeRequestId();
       const request = buildIdentityGetRequest({
         origin: currentOrigin,
-        text: "向 Notes Demo 提供身份以解锁加密笔记",
+        text: t("app.identity.requestText"),
         ttlSeconds: 300,
         requestId
       });
       const response = await session.runRequest(request);
       if (!response.ok) {
-        setLastError(formatProtocolError(response.error.code, response.error.message));
+        setLastError(formatProtocolError(response.error.code, response.error.message, t));
         setIsLoggingIn(false);
         return;
       }
@@ -613,12 +616,12 @@ export default function App() {
       });
       setPopupState("connected");
     } catch (err) {
-      setLastError(formatTransportError(err));
+      setLastError(formatTransportError(err, t));
     } finally {
       setIsLoggingIn(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedTargetOrigin, currentOrigin]);
+  }, [normalizedTargetOrigin, currentOrigin, t]);
 
   /* ============== 切换拦截 ============== */
 
@@ -815,7 +818,7 @@ export default function App() {
       folderId: record.folderId,
       title: record.title,
       tags: [...record.tags],
-      markdown: "（解密中...）",
+      markdown: t("editor.loading.placeholder"),
       baseline: {
         title: record.title,
         tags: [...record.tags],
@@ -833,7 +836,8 @@ export default function App() {
     }
 
     const request = buildCipherDecryptRequest({
-      text: `解密 ${record.title} 内容`,
+      // 协议层 text 由调用方注入；这里只是 popup 提示语，使用当前语言即可。
+      text: `${record.title}`,
       nonceBase64: record.cipher.nonceBase64,
       cipherbytesBase64: record.cipher.cipherbytesBase64,
       requestId: myRequestId
@@ -854,7 +858,7 @@ export default function App() {
       }
 
       if (!response.ok) {
-        throw new Error(formatProtocolError(response.error.code, response.error.message));
+        throw new Error(formatProtocolError(response.error.code, response.error.message, t));
       }
       const decrypted = parseCipherDecryptResult(response.result as never);
 
@@ -903,7 +907,7 @@ export default function App() {
       // 通过校验 & 已确认是失败：本请求已落地（失败），清掉 pending 引用。
       pendingDecryptRef.current = null;
 
-      setDecryptError(formatTransportError(err));
+      setDecryptError(formatTransportError(err, t));
       setCurrentEditorState({
         noteId: myNoteId,
         kind: "persisted",
@@ -1059,11 +1063,11 @@ export default function App() {
     const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
     setNameDialog({
       mode: { kind: "create-folder", parentId },
-      title: "新建文件夹",
-      description: "输入文件夹名。若与同父目录下已有文件夹重名，将自动补编号。",
+      title: t("app.newFolderDialog.title"),
+      description: t("app.newFolderDialog.description"),
       initialValue: DEFAULT_FOLDER_BASE_NAME,
-      placeholder: "文件夹名",
-      confirmLabel: "创建"
+      placeholder: t("app.newFolderDialog.placeholder"),
+      confirmLabel: t("app.newFolderDialog.confirmLabel")
     });
     setLastError(null);
   }
@@ -1080,7 +1084,7 @@ export default function App() {
       const finalTitle = findAvailableName(trimmed, taken);
       const result = createFolder(space, { parentId: dialog.mode.parentId, title: finalTitle });
       if (!result) {
-        setLastError("新建文件夹失败：未知原因。");
+        setLastError(t("app.error.createFolderFailed"));
         setNameDialog(null);
         return;
       }
@@ -1099,7 +1103,7 @@ export default function App() {
       const trimmed = value.trim();
       const result = renameFolder(space, dialog.mode.folderId, trimmed);
       if (!result) {
-        setLastError("重命名失败：同目录下已有同名文件夹。");
+        setLastError(t("app.error.renameFolderConflict"));
         setNameDialog(null);
         return;
       }
@@ -1119,7 +1123,7 @@ export default function App() {
         return;
       }
       if (isNoteTitleConflictWithEditor(space.notes, currentEditorState.folderId, trimmed, noteId, currentEditorState)) {
-        setLastError("重命名失败：同目录下已有同名 note。");
+        setLastError(t("app.error.renameNoteConflict"));
         setNameDialog(null);
         return;
       }
@@ -1135,7 +1139,7 @@ export default function App() {
       return;
     }
     if (isNoteTitleConflict(space.notes, target.folderId, trimmed, noteId)) {
-      setLastError("重命名失败：同目录下已有同名 note。");
+      setLastError(t("app.error.renameNoteConflict"));
       setNameDialog(null);
       return;
     }
@@ -1165,7 +1169,7 @@ export default function App() {
       const target = space.folders[dialog.mode.folderId];
       if (!target) return null;
       if (isFolderTitleConflict(space.folders, target.parentId, value, dialog.mode.folderId)) {
-        return "同父目录下已有同名文件夹。";
+        return t("app.renameFolderConflictInline");
       }
       return null;
     }
@@ -1173,14 +1177,14 @@ export default function App() {
     const noteId = dialog.mode.noteId;
     if (currentEditorState && currentEditorState.noteId === noteId) {
       if (isNoteTitleConflictWithEditor(space.notes, currentEditorState.folderId, value, noteId, currentEditorState)) {
-        return "同目录下已有同名 note。";
+        return t("app.renameNoteConflictInline");
       }
       return null;
     }
     const target = space.notes[noteId];
     if (!target) return null;
     if (isNoteTitleConflict(space.notes, target.folderId, value, noteId)) {
-      return "同目录下已有同名 note。";
+      return t("app.renameNoteConflictInline");
     }
     return null;
   }
@@ -1188,8 +1192,8 @@ export default function App() {
   function handleDeleteFolder(folderId: string) {
     if (!isFolderEmpty(space, folderId)) {
       setPendingDialog({
-        title: "文件夹非空，无法删除",
-        message: "首版不支持递归删除。请先清空里面的文件夹和 note 后再删除。",
+        title: t("app.folderNotEmpty.title"),
+        message: t("app.folderNotEmpty.message"),
         onDismiss: () => setPendingDialog(null)
       });
       return;
@@ -1259,8 +1263,8 @@ export default function App() {
     const next = moveFolder(space, folderId, newParentId);
     if (!next) {
       setPendingDialog({
-        title: "无法移动文件夹",
-        message: "目标位置不合法，或目标目录下已有同名文件夹。",
+        title: t("app.moveFolderInvalid.title"),
+        message: t("app.moveFolderInvalid.message"),
         onDismiss: () => setPendingDialog(null)
       });
       return;
@@ -1278,8 +1282,8 @@ export default function App() {
       }
       if (isNoteTitleConflictWithEditor(space.notes, newFolderId, currentEditorState.title, noteId, currentEditorState)) {
         setPendingDialog({
-          title: "无法移动 note",
-          message: "目标目录下已有同名 note，请改文件名或换目标文件夹。",
+          title: t("app.moveNoteConflict.title"),
+          message: t("app.moveNoteConflict.message"),
           onDismiss: () => setPendingDialog(null)
         });
         return;
@@ -1292,8 +1296,8 @@ export default function App() {
     const next = moveNote(space, noteId, newFolderId);
     if (!next) {
       setPendingDialog({
-        title: "无法移动 note",
-        message: "目标目录下已有同名 note，请改文件名或换目标文件夹。",
+        title: t("app.moveNoteConflict.title"),
+        message: t("app.moveNoteConflict.message"),
         onDismiss: () => setPendingDialog(null)
       });
       return;
@@ -1317,17 +1321,17 @@ export default function App() {
     if (saveOverlay !== null) return; // 已经在阻塞态，不重复开。
     const state = currentEditorState;
     if (state.decryptFailed) {
-      setLastError("当前 note 解密失败，无法重新加密保存。请删除或切换 origin / active key 后重试。");
+      setLastError(t("app.error.cannotSaveDecryptFailed"));
       return;
     }
     if (state.loading) {
       // 防御性：UI 上 save 按钮已 disabled，但 handler 也再挡一次。
-      setLastError("当前 note 正在解密中，无法保存。请等待解密完成。");
+      setLastError(t("app.error.cannotSaveLoading"));
       return;
     }
     const titleCheck = validateTitle(state.title);
     if (!titleCheck.ok) {
-      setLastError(`保存失败：${titleCheck.failure.message}`);
+      setLastError(`${t("app.error.saveFailure.prefix")}${t("titleError.empty")}`);
       return;
     }
     if (
@@ -1339,7 +1343,7 @@ export default function App() {
         state
       )
     ) {
-      setLastError(`保存失败：当前目录下已有同名 note "${titleCheck.title}"。`);
+      setLastError(t("app.error.sameFolderConflict", { name: titleCheck.title }));
       return;
     }
     setLastError(null);
@@ -1360,7 +1364,7 @@ export default function App() {
     if (state.loading) return; // 防御性：loading 时无法保存
     const titleCheck = validateTitle(state.title);
     if (!titleCheck.ok) {
-      setLastError(`保存失败：${titleCheck.failure.message}`);
+      setLastError(`${t("app.error.saveFailure.prefix")}${t("titleError.empty")}`);
       setSaveOverlay(null);
       return;
     }
@@ -1373,7 +1377,7 @@ export default function App() {
         state
       )
     ) {
-      setLastError(`保存失败：当前目录下已有同名 note "${titleCheck.title}"。`);
+      setLastError(t("app.error.sameFolderConflict", { name: titleCheck.title }));
       setSaveOverlay(null);
       return;
     }
@@ -1405,7 +1409,7 @@ export default function App() {
     try {
       const session = getSessionClient();
       const request = buildCipherEncryptRequest({
-        text: "向 Notes Demo 加密当前 note 的 markdown",
+        text: t("app.encrypt.requestText"),
         contentType: NOTE_CONTENT_TYPE,
         markdown: draftAtSave.markdown,
         requestId: makeRequestId()
@@ -1417,7 +1421,7 @@ export default function App() {
         return;
       }
       if (!response.ok) {
-        setLastError(formatProtocolError(response.error.code, response.error.message));
+        setLastError(formatProtocolError(response.error.code, response.error.message, t));
         return;
       }
       const cipher = parseCipherEncryptResult(response.result as never);
@@ -1463,7 +1467,7 @@ export default function App() {
       // 用户主动取消时，closeSession 会让 in-flight 请求抛 popup_closed——
       // 这时**不**当成错误显示，避免误导（"popup 被关闭"是因为我们自己关的）。
       if (!saveCancelledRef.current) {
-        setLastError(formatTransportError(err));
+        setLastError(formatTransportError(err, t));
       }
       // 失败 / 取消：currentEditorState 保持原样，不回滚。
     } finally {
@@ -1583,7 +1587,7 @@ export default function App() {
       target.kind === "root" ? { kind: "root", id: null } : { kind: "folder", id: target.id }
     );
     if (!check.ok) {
-      setLastError(describeDragLegalityReason(check.reason!));
+      setLastError(translateDragReason(check.reason!, t));
       setMoveState(null);
       return;
     }
@@ -1604,11 +1608,11 @@ export default function App() {
     if (!target) return;
     setNameDialog({
       mode: { kind: "rename-folder", folderId },
-      title: "重命名文件夹",
-      description: "输入新文件夹名。若与同父目录下已有文件夹重名，将阻断。",
+      title: t("app.renameFolderDialog.title"),
+      description: t("app.renameFolderDialog.description"),
       initialValue: target.title,
-      placeholder: "文件夹名",
-      confirmLabel: "确认"
+      placeholder: t("app.renameFolderDialog.placeholder"),
+      confirmLabel: t("app.renameFolderDialog.confirmLabel")
     });
     setLastError(null);
   }
@@ -1624,11 +1628,11 @@ export default function App() {
     }
     setNameDialog({
       mode: { kind: "rename-note", noteId },
-      title: "重命名 note",
-      description: "输入新文件名（标题）。若与同目录下已有 note 重名，将阻断。",
+      title: t("app.renameNoteDialog.title"),
+      description: t("app.renameNoteDialog.description"),
       initialValue: initial,
-      placeholder: "文件名",
-      confirmLabel: "确认"
+      placeholder: t("app.renameNoteDialog.placeholder"),
+      confirmLabel: t("app.renameNoteDialog.confirmLabel")
     });
     setLastError(null);
   }
@@ -1670,7 +1674,7 @@ export default function App() {
       target.kind === "root" ? { kind: "root", id: null } : { kind: "folder", id: target.id }
     );
     if (!check.ok) {
-      setLastError(describeDragLegalityReason(check.reason!));
+      setLastError(translateDragReason(check.reason!, t));
       setDragging(null);
       setDropHover(null);
       return;
@@ -1806,9 +1810,19 @@ export default function App() {
       treeOrderedNotes: treeOrdered.map((n) => viewSpace.notes[n.id]).filter(Boolean) as StoredNoteRecord[],
       searchQuery,
       activeTag,
-      pathLabelFor: (folderId) => folderPathLabel(viewSpace.folders, folderId)
+      // 翻译由 App 层统一收口：lib 层只返回结构化 segments，
+      // 这里把每个 segment 转成当前语言字符串后用 " / " 拼起来。
+      pathLabelFor: (folderId) => {
+        const segments = folderPathSegments(viewSpace.folders, folderId);
+        const parts = segments.map((seg) =>
+          seg.kind === "root"
+            ? t("sidebar.root.name")
+            : seg.title || t("sidebar.placeholder.folder")
+        );
+        return parts.join(" / ");
+      }
     });
-  }, [isSearchMode, viewSpace, searchQuery, activeTag]);
+  }, [isSearchMode, viewSpace, searchQuery, activeTag, t]);
 
   const currentFolder: StoredFolderRecord | null = useMemo(() => {
     if (selection.kind === "folder" && selection.id !== null) {
@@ -1852,8 +1866,12 @@ export default function App() {
   const titleError = useMemo(() => {
     if (!currentEditorState) return null;
     const check = validateTitle(currentEditorState.title);
-    return check.ok ? null : check.failure.message;
-  }, [currentEditorState]);
+    if (check.ok) return null;
+    // UI 层按 failure.code 翻译——**不**直接展示 lib 层兜底消息。
+    // lib 层 message 字段仅供 log / 调试；展示层只信 code。
+    if (check.failure.code === "empty") return t("titleError.empty");
+    return null;
+  }, [currentEditorState, t]);
 
   const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
 
@@ -1895,14 +1913,14 @@ export default function App() {
     if (bannerKind === "error") return lastError;
     if (bannerKind === "decrypt") {
       return currentEditorState?.decryptFailed
-        ? `当前 note 解密失败：${decryptError}。已锁定编辑；可删除本条或切回原 origin / active key 后重试。`
+        ? t("app.banner.decryptFailed", { error: decryptError ?? "" })
         : decryptError;
     }
     if (bannerKind === "move") {
-      return "移动模式：点击目标文件夹或根目录完成移动。";
+      return t("app.banner.moveMode");
     }
     return null;
-  }, [bannerKind, lastError, decryptError, currentEditorState?.decryptFailed]);
+  }, [bannerKind, lastError, decryptError, currentEditorState?.decryptFailed, t]);
 
   /* ============== 切换身份 / 删除当前数据 共用的退出清理 ============== */
 
@@ -1954,19 +1972,16 @@ export default function App() {
     if (!identity || isLoggingIn) return;
     const ownerHex = identity.publicKeyHex;
     setConfirmDialog({
-      title: "确认删除当前本地数据？",
-      message:
-        "这会删除当前 publicKey 对应的全部本地 notes 数据，并立即退出当前工作区。\n" +
-        "该操作只影响本浏览器当前站点下的数据，不会删除 Keymaster 身份本身。\n" +
-        "不可恢复。",
-      confirmLabel: "删除并退出",
-      cancelLabel: "取消",
+      title: t("app.deleteDataConfirm.title"),
+      message: t("app.deleteDataConfirm.message"),
+      confirmLabel: t("app.deleteDataConfirm.confirm"),
+      cancelLabel: t("app.deleteDataConfirm.cancel"),
       onCancel: () => setConfirmDialog(null),
       onConfirm: () => {
         setConfirmDialog(null);
         const ok = deleteOwnerSpace(ownerHex);
         if (!ok) {
-          setLastError("删除当前本地数据失败，请重试。");
+          setLastError(t("app.error.deleteCurrentDataFailed"));
           return;
         }
         exitWorkspace();
@@ -1998,29 +2013,43 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="app-header__brand">
-          <span className="app-header__eyebrow">Keymaster Notes</span>
-          <h1>Notes Demo</h1>
-          <p>真实调用 <code>identity.get</code> 与 <code>cipher.*</code> 的加密笔记工作区。</p>
+          <span className="app-header__eyebrow">{t("app.brand")}</span>
+          <h1>{t("app.demoName")}</h1>
+          <p>{t("app.demoDescription")}</p>
         </div>
         <button
           type="button"
           className="app-header__sidebar-toggle"
           onClick={() => setIsSidebarOpenOnMobile((v) => !(v ?? false))}
-          aria-label={sidebarOpen ? "收起文件树" : "展开文件树"}
+          aria-label={sidebarOpen ? t("header.sidebar.toggle.expand") : t("header.sidebar.toggle.collapse")}
           aria-expanded={sidebarOpen}
         >
-          {sidebarOpen ? "收起目录" : "目录"}
+          {sidebarOpen ? t("header.sidebar.toggle.close") : t("header.sidebar.toggle.open")}
         </button>
         <label className="app-header__theme">
-          <span>主题</span>
+          <span>{t("header.theme.label")}</span>
           <select
             value={themePreference}
             onChange={(e) => setThemePreference(e.target.value as AppThemePreference)}
-            aria-label="选择主题"
+            aria-label={t("header.theme.aria")}
           >
-            <option value="dark">黑</option>
-            <option value="light">白</option>
-            <option value="system">跟随系统</option>
+            <option value="dark">{t("header.theme.dark")}</option>
+            <option value="light">{t("header.theme.light")}</option>
+            <option value="system">{t("header.theme.system")}</option>
+          </select>
+        </label>
+        <label className="app-header__language">
+          <span>{t("header.language.label")}</span>
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value as typeof language)}
+            aria-label={t("header.language.aria")}
+          >
+            {SUPPORTED_LANGUAGES.map((code) => (
+              <option key={code} value={code}>
+                {LANGUAGE_DISPLAY[code]}
+              </option>
+            ))}
           </select>
         </label>
         <ConnectStatus
@@ -2052,7 +2081,7 @@ export default function App() {
               className="app-banner__action"
               onClick={handleMoveCancel}
             >
-              取消
+              {t("action.cancel")}
             </button>
           ) : null}
           {bannerKind === "error" ? (
@@ -2061,7 +2090,7 @@ export default function App() {
               className="app-banner__action"
               onClick={() => setLastError(null)}
             >
-              知道了
+              {t("app.banner.dismiss")}
             </button>
           ) : null}
         </div>
@@ -2117,6 +2146,7 @@ export default function App() {
               activeTag={activeTag}
               results={searchResults}
               onSelect={handleSearchResultSelect}
+              language={language}
             />
           ) : currentEditorState ? (
             <>
@@ -2152,7 +2182,7 @@ export default function App() {
                       prev ? { ...prev, title: e.target.value } : prev
                     )
                   }
-                  placeholder="未命名 note"
+                  placeholder={t("note.title.placeholder")}
                   disabled={
                     !!currentEditorState.decryptFailed ||
                     currentEditorState.loading ||
@@ -2162,10 +2192,10 @@ export default function App() {
                 />
                 <span className="document-head__hint">
                   {currentEditorState.kind === "new"
-                    ? "新建 note（尚未保存）"
+                    ? t("note.head.hint.new")
                     : currentEditorState.loading
-                      ? "正在从 Keymaster 解密正文…"
-                      : "文件名（保存时会写入 note record）"}
+                      ? t("note.head.hint.loading")
+                      : t("note.head.hint.persisted")}
                 </span>
               </div>
               <div className="document-editor">
@@ -2185,17 +2215,13 @@ export default function App() {
             </>
           ) : currentFolder ? (
             <div className="document-panel__empty">
-              <h2>选中文件夹：{currentFolder.title || "未命名文件夹"}</h2>
-              <p>
-                文件夹操作见左侧工具条。重命名请右键文件夹 → 重命名。
-              </p>
+              <h2>{t("folder.empty.title", { title: currentFolder.title || t("sidebar.toolbar.title.fallbackFolder") })}</h2>
+              <p>{t("folder.empty.description")}</p>
             </div>
           ) : (
             <div className="document-panel__empty">
-              <h2>选择或新建一个 note</h2>
-              <p>
-                左侧选择文件夹或 note；右键文件夹可新建 / 删除 / 移动；右键 note 可重命名 / 移动 / 删除。
-              </p>
+              <h2>{t("root.empty.title")}</h2>
+              <p>{t("root.empty.description")}</p>
             </div>
           )}
         </section>
@@ -2208,7 +2234,7 @@ export default function App() {
             <p>{pendingDialog.message}</p>
             <div className="confirm-dialog__actions">
               <button type="button" className="primary-button" onClick={pendingDialog.onDismiss}>
-                知道了
+                {t("action.acknowledge")}
               </button>
             </div>
           </div>
@@ -2309,30 +2335,54 @@ function isDirty(state: CurrentEditorState): boolean {
   return false;
 }
 
-function formatProtocolError(code: ProtocolErrorCode, message: string): string {
-  const map: Record<ProtocolErrorCode, string> = {
-    invalid_request: "无效请求",
-    invalid_origin: "来源非法",
-    user_rejected: "用户在 Keymaster 中取消",
-    active_key_unavailable: "当前 Keymaster 没有可用 active key",
-    decrypt_failed: "解密失败（可能 origin / active key 切换）",
-    internal_error: "Keymaster 内部错误"
+function formatProtocolError(
+  code: ProtocolErrorCode,
+  message: string,
+  t: (key: import("./i18n/types").MessageKey, values?: import("./i18n/types").InterpolationValues) => string
+): string {
+  const keyByCode: Record<ProtocolErrorCode, import("./i18n/types").MessageKey> = {
+    invalid_request: "error.protocol.invalid_request",
+    invalid_origin: "error.protocol.invalid_origin",
+    user_rejected: "error.protocol.user_rejected",
+    active_key_unavailable: "error.protocol.active_key_unavailable",
+    decrypt_failed: "error.protocol.decrypt_failed",
+    internal_error: "error.protocol.internal_error"
   };
-  return `${map[code]}: ${message}`;
+  return `${t(keyByCode[code])}: ${message}`;
 }
 
-function formatTransportError(error: unknown): string {
+/**
+ * 把 `checkDragLegality` 的 reason code 翻译成当前语言的展示文案。
+ * 单一收口入口——避免在 handler 里反复写 `t("drag.reason." + code)`。
+ */
+function translateDragReason(
+  reason: DragLegalityFailureCode,
+  t: (key: import("./i18n/types").MessageKey, values?: import("./i18n/types").InterpolationValues) => string
+): string {
+  const keyByCode: Record<DragLegalityFailureCode, import("./i18n/types").MessageKey> = {
+    drop_to_note: "drag.reason.drop_to_note",
+    drop_to_self: "drag.reason.drop_to_self",
+    drop_to_descendant: "drag.reason.drop_to_descendant",
+    drop_to_missing_source: "drag.reason.drop_to_missing_source"
+  };
+  return t(keyByCode[reason]);
+}
+
+function formatTransportError(
+  error: unknown,
+  t: (key: import("./i18n/types").MessageKey, values?: import("./i18n/types").InterpolationValues) => string
+): string {
   if (error instanceof ProtocolTransportError) {
-    const map: Record<string, string> = {
-      popup_blocked: "popup 被浏览器拦截",
-      popup_closed: "popup 在协议完成前被关闭",
-      ready_timeout: "等待 popup ready 超时",
-      result_timeout: "等待 result 超时",
-      invalid_origin: "消息来源非法",
-      session_busy: "popup session 繁忙",
-      no_session: "无 session"
+    const keyByCode: Record<string, import("./i18n/types").MessageKey> = {
+      popup_blocked: "error.transport.popup_blocked",
+      popup_closed: "error.transport.popup_closed",
+      ready_timeout: "error.transport.ready_timeout",
+      result_timeout: "error.transport.result_timeout",
+      invalid_origin: "error.transport.invalid_origin",
+      session_busy: "error.transport.session_busy",
+      no_session: "error.transport.no_session"
     };
-    return `${map[error.code] ?? error.code}: ${error.message}`;
+    return `${t(keyByCode[error.code] ?? ("error.transport.no_session"))}: ${error.message}`;
   }
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);

@@ -4,7 +4,8 @@
 // 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 9.3 节 +
 //          2026-06-26 delete-current-owner-space 第 3.1 / 7.3 节 +
 //          2026-06-27 notion-document-toolbar-and-mobile-sidebar
-//          第 4.7 / 8.2 章）：
+//          第 4.7 / 8.2 章 +
+//          施工单 2026-06-27 005-i18n-header-language-switch 8.9 章）：
 //   - 只服务于已登录态（notes 页面顶部），不再承担未登录主入口页面职责。
 //   - popup 连接状态机来自 session client（idle / opening / connected / disconnected）。
 //   - **不再**在本组件内部展示"最近错误"横条——应用级 `lastError` 已统一
@@ -13,8 +14,10 @@
 //   - "删除当前本地数据"语义上比"切换身份"更强：会清掉当前 owner 本地空间。
 //     因此按钮在视觉上需要明显是危险动作，但仍弱于主操作，不能喧宾夺主。
 //   - 未登录态由 `LockScreen` 接管登录入口；本组件不再渲染登录按钮。
+//   - 所有用户可见文案走 i18n 字典；不直接写中文/英文/日文。
 
 import type { ReactNode } from "react";
+import { useI18n } from "../i18n/useI18n";
 
 export type PopupUiState = "idle" | "opening" | "connected" | "disconnected";
 
@@ -32,24 +35,25 @@ export interface ConnectStatusProps {
 }
 
 export function ConnectStatus(props: ConnectStatusProps) {
+  const { t, language } = useI18n();
   return (
     <div className="connect-status">
       <div className="connect-status__indicator">
         <span className={`connect-status__dot connect-status__dot--${props.state}`} aria-hidden="true" />
-        <span className="connect-status__label">{stateLabel(props.state)}</span>
+        <span className="connect-status__label">{stateLabel(props.state, t)}</span>
       </div>
 
       <div className="connect-status__meta">
-        <Row label="page origin" value={props.currentOrigin || "n/a"} />
-        <Row label="target origin" value={props.targetOrigin || "n/a"} />
+        <Row label={t("connect.row.pageOrigin")} value={props.currentOrigin || t("common.value.notAvailable")} />
+        <Row label={t("connect.row.targetOrigin")} value={props.targetOrigin || t("common.value.notAvailable")} />
         <Row
-          label="publicKey"
-          value={props.publicKeyHex ? truncate(props.publicKeyHex, 14) : "未登录"}
+          label={t("connect.row.publicKey")}
+          value={props.publicKeyHex ? truncate(props.publicKeyHex, 14) : t("connect.row.publicKey.empty")}
           title={props.publicKeyHex ?? undefined}
         />
         <Row
-          label="last login"
-          value={props.lastLoginAt ? new Date(props.lastLoginAt).toLocaleString() : "—"}
+          label={t("connect.row.lastLogin")}
+          value={props.lastLoginAt ? new Date(props.lastLoginAt).toLocaleString(language) : "—"}
         />
       </div>
 
@@ -57,24 +61,24 @@ export function ConnectStatus(props: ConnectStatusProps) {
         {props.publicKeyHex ? (
           <>
             <button type="button" className="secondary-button" onClick={props.onLogin} disabled={props.isLoggingIn}>
-              重新登录
+              {t("connect.action.login")}
             </button>
             <button
               type="button"
               className="secondary-button connect-status__forget"
               onClick={props.onForget}
-              title="退回登录壳；不删除本地数据"
+              title={t("connect.action.forget.title")}
             >
-              切换身份 / 更换登录器
+              {t("connect.action.forget")}
             </button>
             <button
               type="button"
               className="secondary-button connect-status__delete"
               onClick={props.onDeleteCurrentData}
               disabled={props.isLoggingIn}
-              title="删除当前 publicKey 对应的全部本地 notes 数据并退出工作区；不会删除 Keymaster 身份本身"
+              title={t("connect.action.delete.title")}
             >
-              删除当前本地数据
+              {t("connect.action.delete")}
             </button>
           </>
         ) : null}
@@ -92,16 +96,16 @@ function Row({ label, value, title }: { label: string; value: ReactNode; title?:
   );
 }
 
-function stateLabel(state: PopupUiState): string {
+function stateLabel(state: PopupUiState, t: (key: import("../i18n/types").MessageKey) => string): string {
   switch (state) {
     case "idle":
-      return "未连接";
+      return t("connect.state.idle");
     case "opening":
-      return "拉起 popup…";
+      return t("connect.state.opening");
     case "connected":
-      return "已就绪";
+      return t("connect.state.connected");
     case "disconnected":
-      return "已断开";
+      return t("connect.state.disconnected");
   }
 }
 

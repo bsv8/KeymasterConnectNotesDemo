@@ -143,15 +143,25 @@ export function isFolderDescendant(
 
 export type DragSourceKind = "folder" | "note";
 
+/**
+ * 拖拽阻断原因码（**稳定真值**，不带语言）。
+ *
+ * 设计缘由（施工单 2026-06-27 005-i18n-header-language-switch 5.5 / 8 章边界）：
+ *   - lib 层**绝不**返回给用户看的中文 / 英文 / 日文句子；
+ *   - UI 层按 `reason` code 调用 `t(...)` 翻译；
+ *   - 这与"协议 error code 保持稳定、只翻译说明文案"完全同构。
+ */
+export type DragLegalityFailureCode =
+  | "drop_to_note"
+  | "drop_to_self"
+  | "drop_to_descendant"
+  | "drop_to_missing_source";
+
 export interface DragLegalityCheck {
   /** 是否允许落在这个目标上。 */
   ok: boolean;
-  /** 阻断时的具体原因。 */
-  reason?:
-    | "drop_to_note"
-    | "drop_to_self"
-    | "drop_to_descendant"
-    | "drop_to_missing_source";
+  /** 阻断时的具体原因 code（**非本地化**）；UI 层按此翻译。 */
+  reason?: DragLegalityFailureCode;
 }
 
 /**
@@ -181,20 +191,6 @@ export function checkDragLegality(
     }
   }
   return { ok: true };
-}
-
-/** 把 `checkDragLegality` 的 reason 转中文文案。 */
-export function describeDragLegalityReason(reason: NonNullable<DragLegalityCheck["reason"]>): string {
-  switch (reason) {
-    case "drop_to_note":
-      return "不能把内容拖到 note 上。";
-    case "drop_to_self":
-      return "不能把文件夹拖到自己内部。";
-    case "drop_to_descendant":
-      return "不能把文件夹拖到自己的后代下面。";
-    case "drop_to_missing_source":
-      return "找不到要拖动的源。";
-  }
 }
 
 /* ============== 节点查找 / 列表 ============== */
@@ -242,18 +238,37 @@ export function ancestorFolderIds(
 }
 
 /**
- * 把 folderId 链转换成"显示 path"：从根到当前 folder 拼接 title。
- * 找不到的 folderId 静默跳过对应段；根目录下的 note → "根目录"。
- * 段与段之间用 " / " 分隔。
+ * 文件夹路径的"结构化"片段。
+ *
+ * 设计缘由（施工单 2026-06-27 005-i18n-header-language-switch 5.5 章）：
+ *   - lib 层**只**返回结构化数据；
+ *   - UI 层拿到 segments 后再决定：根目录用 `t("sidebar.root.name")`，
+ *     folder 用 `record.title` 或 fallback `t("sidebar.placeholder.folder")`。
+ *   - 这样切语言后，搜索结果第二行的 path 不会保留任何中文。
  */
-export function folderPathLabel(
+export type FolderPathSegment =
+  | { kind: "root" }
+  | { kind: "folder"; id: string; title: string };
+
+/**
+ * 把 folderId 链转换成"结构化 path 片段"：首段永远是根目录；后续段从根到当前 folder。
+ * 找不到的 folderId 静默跳过对应段；空 chain（folderId === null 或脏数据）退化为只剩根。
+ */
+export function folderPathSegments(
   folders: Record<string, StoredFolderRecord>,
   folderId: string | null
-): string {
-  if (folderId === null) return "根目录";
+): FolderPathSegment[] {
+  if (folderId === null) return [{ kind: "root" }];
   const chain = folderAncestorChain(folders, folderId);
-  if (chain.length === 0) return "根目录";
-  return ["根目录", ...chain.map((f) => f.title || "未命名文件夹")].join(" / ");
+  if (chain.length === 0) return [{ kind: "root" }];
+  return [
+    { kind: "root" as const },
+    ...chain.map<FolderPathSegment>((f) => ({
+      kind: "folder" as const,
+      id: f.id,
+      title: f.title
+    }))
+  ];
 }
 
 /**
