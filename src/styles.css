@@ -18,7 +18,10 @@
  * 临时 note（is-ephemeral）：在侧栏树上以"未保存"徽章标记，区别于已落库 note。
  */
 
-:root {
+:root,
+:root[data-app-theme="light"] {
+  color-scheme: light;
+
   --color-bg: #fbfbfa;
   --color-bg-soft: #f6f5f4;
   --color-bg-hover: #efefee;
@@ -41,9 +44,53 @@
 
   --shadow-soft: 0 1px 2px rgba(15, 15, 15, 0.04);
 
+  /*
+   * 设计缘由：
+   * - 编辑器颜色不要直接写死在具体选择器里，统一抽成 token；
+   * - 未来整站切黑/白 theme 时，只切根节点 data-app-theme 即可；
+   * - 当前先落 light token，dark token 在下面给出占位。
+   */
+  --editor-inline-code-bg: #f1eee9;
+  --editor-inline-code-text: #6a4a1f;
+  --editor-code-bg: #f6f3ee;
+  --editor-code-text: #2b2926;
+  --editor-code-border: #e2dbd1;
+  --editor-code-language-text: #7a6f61;
+  --editor-code-selection-bg: rgba(35, 131, 226, 0.12);
+
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
     "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+:root[data-app-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #171716;
+  --color-bg-soft: #20201f;
+  --color-bg-hover: #2a2a28;
+  --color-bg-active: #31312f;
+  --color-text: #e7e4df;
+  --color-text-soft: #b5afa5;
+  --color-text-muted: #8d877d;
+  --color-border: #2d2c2a;
+  --color-border-strong: #3d3b38;
+  --color-accent: #4b9fff;
+  --color-accent-soft: rgba(75, 159, 255, 0.14);
+  --color-error: #ff7b72;
+  --color-error-soft: rgba(255, 123, 114, 0.12);
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.28);
+
+  --editor-inline-code-bg: #2a241d;
+  --editor-inline-code-text: #f0c98d;
+  --editor-code-bg: #1f1d1a;
+  --editor-code-text: #e7e2db;
+  --editor-code-border: #34302a;
+  --editor-code-language-text: #b6ab9b;
+  --editor-code-selection-bg: rgba(75, 159, 255, 0.2);
 }
 
 * {
@@ -768,15 +815,13 @@ code {
   padding: 8px 0;
 }
 
-.editor .ProseMirror h1,
-.editor .ProseMirror h2,
-.editor .ProseMirror h3 {
-  margin: 1em 0 0.4em;
-  font-weight: 600;
-}
-
-.editor .ProseMirror p {
-  margin: 0.5em 0;
+.editor .bn-inline-content code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--editor-inline-code-bg);
+  color: var(--editor-inline-code-text);
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
 }
 
 .editor .bn-block-content[data-content-type="heading"] h1 {
@@ -798,6 +843,42 @@ code {
 
 .editor .bn-block-content[data-content-type="checkListItem"] input[type="checkbox"] {
   accent-color: var(--color-accent);
+}
+
+/*
+ * 设计缘由：
+ * - BlockNote 默认 codeBlock 是纯黑底白字，和当前浅底工作区割裂；
+ * - 这里改为走 editor theme token；
+ * - 只覆盖 codeBlock，不动 BlockNote 其它交互结构，避免再破坏行头/拖拽对齐。
+ */
+.editor .bn-block-content[data-content-type="codeBlock"] {
+  background: var(--editor-code-bg);
+  color: var(--editor-code-text);
+  border: 1px solid var(--editor-code-border);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.editor .bn-block-content[data-content-type="codeBlock"] > pre {
+  margin: 0;
+  padding: 18px 20px;
+}
+
+.editor .bn-block-content[data-content-type="codeBlock"] code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.editor .bn-block-content[data-content-type="codeBlock"] > div > select {
+  color: var(--editor-code-language-text);
+}
+
+.editor .bn-block-content[data-content-type="codeBlock"] ::selection {
+  background: var(--editor-code-selection-bg);
 }
 
 /* ============== inspector ============== */
