@@ -52,7 +52,7 @@ import {
 } from "react";
 import { buildTree, type TreeFolderNode, type TreeNoteNode } from "../lib/path";
 import type { StoredNotesSpace } from "../lib/storage";
-import type { StoredFolderRecord } from "../lib/notes";
+import type { StoredFolderRecord, StoredNoteRecord } from "../lib/notes";
 
 export type SelectionKind = "folder" | "note" | "root";
 export interface SidebarSelection {
@@ -115,9 +115,9 @@ export interface NotesSidebarProps {
   ephemeralNoteId?: string | null;
   selection: SidebarSelection;
   /**
-   * 当前选中的 folder；为 null 时不渲染"简化 folder 工具条"。
-   * 设计缘由（施工单 2026-06-27 第 4.6.1 / 4.6.2 章）：仅 folder 选中时显示该工具条；
-   * note / root 选中时不显示，避免与 document-toolbar 形成双入口。
+   * 当前选中的 folder；仅在 selection.kind === "folder" 时有值。
+   * 设计缘由：sidebar 顶部信息框统一常驻，但 folder 删除动作仍只依赖
+   * folder record 真值，避免在组件里重复推断 folder 数据。
    */
   currentFolder: StoredFolderRecord | null;
   searchQuery: string;
@@ -164,6 +164,51 @@ export interface NotesSidebarProps {
 
 export function NotesSidebar(props: NotesSidebarProps) {
   const tree = buildTree(props.space.folders, props.space.notes);
+  const currentNote: StoredNoteRecord | null =
+    props.selection.kind === "note" && props.selection.id !== null
+      ? props.space.notes[props.selection.id] ?? null
+      : null;
+
+  /**
+   * 顶部信息框始终渲染同一套结构，只替换文案。
+   * 这样不需要写死高度，也不会因为 folder / note / root 三态切换而抖动。
+   */
+  const selectionInfo =
+    props.currentFolder !== null
+      ? {
+          eyebrow: "当前文件夹",
+          title: props.currentFolder.title || "未命名文件夹",
+          meta: `updated ${new Date(props.currentFolder.updatedAt).toLocaleString()}`,
+          actionLabel: "删除文件夹",
+          actionDisabled: !!props.disabled,
+          onAction: () => props.onFolderAction({ type: "delete", folderId: props.currentFolder!.id })
+        }
+      : currentNote !== null
+        ? {
+            eyebrow: "当前文件",
+            title: currentNote.title || "未命名文件",
+            meta: `updated ${new Date(currentNote.updatedAt).toLocaleString()}`,
+            actionLabel: "当前是文件",
+            actionDisabled: true,
+            onAction: undefined
+          }
+        : props.selection.kind === "note"
+          ? {
+              eyebrow: "当前文件",
+              title: "未保存文件",
+              meta: "该文件尚未落库",
+              actionLabel: "当前是文件",
+              actionDisabled: true,
+              onAction: undefined
+            }
+        : {
+            eyebrow: "当前选择",
+            title: "根目录",
+            meta: "当前未选择文件夹或文件",
+            actionLabel: "无文件夹可删",
+            actionDisabled: true,
+            onAction: undefined
+          };
 
   const isSelectedFolder = (id: string) =>
     props.selection.kind === "folder" && props.selection.id === id;
@@ -242,35 +287,29 @@ export function NotesSidebar(props: NotesSidebarProps) {
       </div>
 
       {/*
-        简化 folder 工具条：仅在 selection === folder 时显示在根目录上方。
-        设计缘由（施工单 2026-06-27 第 4.6.1 / 4.6.2 / 8.3 章）：
-        - 选中 folder → 显示（标题 + updated + 删除）；
-        - 选中 note / root → 不显示，避免与 document-toolbar 重复形成双入口；
-        - 文档区**不**再放"删除文件夹"，由本工具条承担唯一入口。
+        顶部信息框常驻：
+        - folder：标题 + updated + 删除文件夹；
+        - note：标题 + updated + 禁用占位文案；
+        - root：根目录 + 占位说明 + 禁用占位文案。
+        设计缘由：保持 sidebar 栏目高度稳定，但不靠写死高度。
       */}
-      {props.currentFolder ? (
-        <div className="sidebar-folder-toolbar" role="group" aria-label="当前文件夹工具条">
-          <div className="sidebar-folder-toolbar__head">
-            <span className="sidebar-folder-toolbar__eyebrow">当前文件夹</span>
-            <strong className="sidebar-folder-toolbar__title">
-              {props.currentFolder.title || "未命名文件夹"}
-            </strong>
-          </div>
-          <div className="sidebar-folder-toolbar__row">
-            <span className="sidebar-folder-toolbar__meta">
-              updated {new Date(props.currentFolder.updatedAt).toLocaleString()}
-            </span>
-            <button
-              type="button"
-              className="secondary-button sidebar-folder-toolbar__delete"
-              onClick={() => props.onFolderAction({ type: "delete", folderId: props.currentFolder!.id })}
-              disabled={props.disabled}
-            >
-              删除文件夹
-            </button>
-          </div>
+      <div className="sidebar-folder-toolbar" role="group" aria-label="当前选择信息">
+        <div className="sidebar-folder-toolbar__head">
+          <span className="sidebar-folder-toolbar__eyebrow">{selectionInfo.eyebrow}</span>
+          <strong className="sidebar-folder-toolbar__title">{selectionInfo.title}</strong>
         </div>
-      ) : null}
+        <div className="sidebar-folder-toolbar__row">
+          <span className="sidebar-folder-toolbar__meta">{selectionInfo.meta}</span>
+          <button
+            type="button"
+            className="secondary-button sidebar-folder-toolbar__delete"
+            onClick={selectionInfo.onAction}
+            disabled={selectionInfo.actionDisabled}
+          >
+            {selectionInfo.actionLabel}
+          </button>
+        </div>
+      </div>
 
       <div
         className="sidebar-tree"

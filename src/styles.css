@@ -659,6 +659,7 @@ code {
   flex-shrink: 0;
   font-size: 12px;
   padding: 3px 8px;
+  white-space: nowrap;
 }
 
 .tree-item {
