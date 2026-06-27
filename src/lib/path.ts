@@ -43,13 +43,23 @@ export type TreeNode = TreeFolderNode | TreeNoteNode | TreeRootNode;
 
 /**
  * 由 folder / note 实体构建完整的 tree。
+ * - folder 树先按 `parentId` 挂好；
+ * - note 逐条**直接**挂到目标 folder（或根目录），不再做"分层消费"；
  * - 同父目录下 folder / note 都按 title 字典序排序；
- * - 不存在的父 id 视为根目录下的孤儿（兜底），保证不丢节点。
+ * - 找不到 `folderId` 对应 folder 的 note 视为"根目录孤儿"，兜底挂到 `root.notes`。
+ *
+ * 设计缘由（施工单 2026-06-27 004-tree-note-parent-attach-fix 第 5 / 6 章）：
+ *   - 旧实现用 `notesByParent + consumeNotes` 多次消费，会漏掉深层 folder 的
+ *     note，导致它们全部回流到 `root.notes`，看起来"所有 note 都堆在根目录"；
+ *   - 改"逐条 note 直接挂载"后，挂载点只看 `note.folderId` 一个真值，不再依
+ *     赖"消费了几层"这种隐含状态，根目录直属 note 与孤儿 note 的语义也更清
+ *     晰。
  */
 export function buildTree(
   folders: Record<string, StoredFolderRecord>,
   notes: Record<string, StoredNoteRecord>
 ): TreeRootNode {
+  // 第一步：创建所有 folder 节点。
   const folderById = new Map<string, TreeFolderNode>();
   for (const f of Object.values(folders)) {
     folderById.set(f.id, {
@@ -61,19 +71,22 @@ export function buildTree(
       notes: []
     });
   }
+
+  // 第二步：把 folder 挂成完整树。
   const root: TreeRootNode = { kind: "root", id: null, folders: [], notes: [] };
-  const attach = (node: TreeFolderNode) => {
+  for (const node of folderById.values()) {
     const parent = node.parentId === null ? null : folderById.get(node.parentId);
     if (parent) {
       parent.folders.push(node);
     } else {
       root.folders.push(node);
     }
-  };
-  for (const node of folderById.values()) attach(node);
+  }
 
-  // 同 parentId 下，folder / note 各按 title 排序后挂载。
-  const notesByParent = new Map<string | null, TreeNoteNode[]>();
+  // 第三步：逐条 note 直接挂到目标 folder / 根目录。
+  //   - folderId === null              → 根目录直属 note
+  //   - folderId 命中 folderById       → 对应 folder 的 notes
+  //   - folderId 找不到                → 根目录孤儿（兜底，保证不丢节点）
   for (const n of Object.values(notes)) {
     const node: TreeNoteNode = {
       kind: "note",
@@ -81,42 +94,25 @@ export function buildTree(
       title: n.title,
       folderId: n.folderId
     };
-    const list = notesByParent.get(n.folderId) ?? [];
-    list.push(node);
-    notesByParent.set(n.folderId, list);
+    const target =
+      n.folderId === null ? null : folderById.get(n.folderId) ?? null;
+    if (target) {
+      target.notes.push(node);
+    } else {
+      root.notes.push(node);
+    }
   }
-  const consumeNotes = (parentId: string | null, target: TreeFolderNode | TreeRootNode) => {
-    const list = notesByParent.get(parentId);
-    if (!list) return;
-    list.sort((a, b) => a.title.localeCompare(b.title));
-    target.notes.push(...list);
-    notesByParent.delete(parentId);
-  };
-  const sortFolders = (n: TreeFolderNode) => {
+
+  // 第四步：递归排序——folder 与 note 在各自层级内按 title 字典序排好。
+  const sortFolderTree = (n: TreeFolderNode) => {
     n.folders.sort((a, b) => a.title.localeCompare(b.title));
-    for (const c of n.folders) sortFolders(c);
+    n.notes.sort((a, b) => a.title.localeCompare(b.title));
+    for (const c of n.folders) sortFolderTree(c);
   };
-  const sortRootFolders = () => {
-    root.folders.sort((a, b) => a.title.localeCompare(b.title));
-    for (const c of root.folders) sortFolders(c);
-  };
-  // 顺序：先 root，再递归 children。
-  consumeNotes(null, root);
-  for (const f of root.folders) {
-    consumeNotes(f.id, f);
-  }
-  sortRootFolders();
-  for (const f of root.folders) {
-    consumeNotes(f.id, f);
-    sortFolders(f);
-  }
-  // 兜底：残留 notes 视为根下。
-  if (notesByParent.size > 0) {
-    const leftover: TreeNoteNode[] = [];
-    for (const list of notesByParent.values()) leftover.push(...list);
-    leftover.sort((a, b) => a.title.localeCompare(b.title));
-    root.notes.push(...leftover);
-  }
+  root.folders.sort((a, b) => a.title.localeCompare(b.title));
+  root.notes.sort((a, b) => a.title.localeCompare(b.title));
+  for (const c of root.folders) sortFolderTree(c);
+
   return root;
 }
 
