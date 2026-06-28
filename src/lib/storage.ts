@@ -1,7 +1,9 @@
 // src/lib/storage.ts
-// 本地 KV 存储 + folder/note 容器 + 增删改查 + 同目录重名 / 移动合法性 / 空间为空判定。
+// 本地 KV 存储 + folder/note 容器 + 增删改查 + 同目录重名 / 移动合法性 / 空间为空判定
+// + connect session 本地记录存取。
 //
-// 设计缘由（施工单第 4 / 9 章 + 2026-06-26 save-switch-current-editor-state）：
+// 设计缘由（施工单第 4 / 9 章 + 2026-06-26 save-switch-current-editor-state +
+//          2026-06-28 001 connect-session-bound-key-integration 第 4.2 / 8.4 章）：
 //   - 容器按 ownerPublicKeyHex 分区；存储 key `notes-demo:owner:{publicKeyHex}`。
 //   - 容器形态：`{ folders: Record<id, StoredFolderRecord>, notes: Record<id, StoredNoteRecord> }`。
 //   - owner 信息**不**写进 record 本身；外层 key 已经隔离。
@@ -10,11 +12,96 @@
 //   - **不**再为未保存 note 提供任何"半持久化容器"——
 //     未保存 note 只活在 App 的内存态 `currentEditorState`（`kind: "new"`）里；
 //     第一次成功加密保存后才通过 `putNote` 进入 space / localStorage。
+//   - 本地 connect session 记录收口到本文件：
+//       * storage key = `notes-demo:connect-session`（**全局单条**，**不**按 owner 分区）；
+//       * 持久化内容 = `{ sessionId, ownerPublicKeyHex, targetOrigin, claimsSnapshot, resolvedAt }`；
+//       * **不**持久化 popup transport 句柄；
+//       * **不**持久化 popup unlock runtime / 用户密码。
 
 import type { StoredFolderRecord, StoredNoteRecord } from "./notes";
 import { isStoredFolderRecord, isStoredNoteRecord } from "./notes";
 
 const STORAGE_KEY_PREFIX = "notes-demo:owner:";
+const CONNECT_SESSION_STORAGE_KEY = "notes-demo:connect-session";
+
+/* ============== connect session 本地记录 ============== */
+
+/**
+ * 本地持久化的 connect session 记录（单条）。
+ *
+ * 设计缘由（施工单 2026-06-28 001 第 4.2 / 8.4 章）：
+ *   - 本地持久化这条记录；
+ *   - **不**持久化 popup transport 句柄 / 解锁运行时 / 用户密码。
+ */
+export interface StoredConnectSessionRecord {
+  v: 1;
+  /** session id。后续 `connect.resume` / `cipher.*` 的真值。 */
+  sessionId: string;
+  /** session 绑定 key 的公钥 hex；owner 分区 key。 */
+  ownerPublicKeyHex: string;
+  /** 本地 target origin；resume / cipher.* 时用于 origin 校验前置。 */
+  targetOrigin: string;
+  /** 解析时的 claims 明文快照（仅展示用；不参与协议路径）。 */
+  claimsSnapshot: Record<string, unknown>;
+  /** 解析时间（unix milliseconds）；页头 "last login" 展示用。 */
+  resolvedAt: number;
+}
+
+/**
+ * 读取本地 connect session 记录。
+ * - 缺失 / 解析失败 / schema 不合法 → 返回 null（"无 session"）；
+ * - 调用方拿到 null 时按策略决定是否进入 `connect.login` 路径。
+ */
+export function loadConnectSession(): StoredConnectSessionRecord | null {
+  const raw = readStorage(CONNECT_SESSION_STORAGE_KEY);
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isStoredConnectSessionRecord(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 写入本地 connect session 记录（覆盖式）。
+ * 失败时 `console.error` 但不抛——session 持久化失败不应阻塞主流程。
+ */
+export function saveConnectSession(record: StoredConnectSessionRecord): void {
+  writeStorage(CONNECT_SESSION_STORAGE_KEY, JSON.stringify(record));
+}
+
+/**
+ * 清掉本地 connect session 记录。
+ *
+ * 设计缘由（施工单 2026-06-28 001 第 4.4 / 6.6 / 6.9 章）：
+ *   - caller 主动 logout 成功后必须调用；
+ *   - session 被服务端判定无效时（`resume` 返回 invalid）也必须调用；
+ *   - 单条 key 直接覆盖；不抛异常。
+ */
+export function clearConnectSession(): void {
+  removeStorage(CONNECT_SESSION_STORAGE_KEY);
+}
+
+/**
+ * 校验 `StoredConnectSessionRecord` 的最小 schema。
+ * - 字段缺失 / 类型错误一律视为非法；
+ * - `claimsSnapshot` 仅要求是 plain object（key / value 不深度校验）。
+ */
+function isStoredConnectSessionRecord(value: unknown): value is StoredConnectSessionRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (v.v !== 1) return false;
+  if (typeof v.sessionId !== "string" || v.sessionId.length === 0) return false;
+  if (typeof v.ownerPublicKeyHex !== "string" || v.ownerPublicKeyHex.length === 0) return false;
+  if (typeof v.targetOrigin !== "string" || v.targetOrigin.length === 0) return false;
+  if (!v.claimsSnapshot || typeof v.claimsSnapshot !== "object" || Array.isArray(v.claimsSnapshot)) {
+    return false;
+  }
+  if (typeof v.resolvedAt !== "number") return false;
+  return true;
+}
 
 export interface StoredNotesSpace {
   v: 1;

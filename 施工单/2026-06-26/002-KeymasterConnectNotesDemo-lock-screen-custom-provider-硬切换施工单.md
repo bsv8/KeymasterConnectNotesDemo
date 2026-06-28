@@ -1,5 +1,17 @@
 # KeymasterConnectNotesDemo LockScreen 与自定义登录器硬切换一次性施工单
 
+> **本施工单已被取代（archived）**
+>
+> 本单描述的是「LockScreen + 自定义登录器」硬切换的**当时设计**，其中：
+> - 「用同样的 `identity.get` / `cipher.*` 登录与操作」等条目属于 **旧模型** 下的产品定位；
+> - 旧模型已被后续两份硬切换施工单完全取代：
+>   - [施工单/2026-06-28/001 connect-session-bound-key-integration 硬切换](../2026-06-28/001-KeymasterConnectNotesDemo-connect-session-bound-key-integration-硬切换施工单.md)（登录真值切到 `connectSessionId`）
+>   - [施工单/2026-06-28/002 protocol-business-methods-bind-connect-session 硬切换](../2026-06-28/002-KeymasterConnectNotesDemo-protocol-business-methods-bind-connect-session-硬切换施工单.md)（`identity.get` 重新定位为「会话内身份断言能力」、其 contract 切到 session-bound）
+>
+> 本单仅作历史归档。LockScreen 当前形态、登录入口协议真值均以上述两份后续施工单为准；本单中关于「用同样的 `identity.get` 登录」的表述不构成对当前 demo 行为的描述。
+>
+> 验收口径：搜索本仓库时若仍命中本施工单中的 `identity.get` 字样，按"已归档的旧模型描述"处理，不计入"残留旧叙事"。
+
 ## 1. 本单定位
 
 本单不是补丁说明，不是“先加个恢复 identity 的小修”，也不是分阶段迁移方案。

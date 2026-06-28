@@ -372,6 +372,26 @@ export class PopupSessionClient {
         if (typeof event.origin === "string" && normalizeOrigin(event.origin) !== targetOrigin) {
           return;
         }
+        // 关键竞态：复用同名 popup 时，旧文档 unload 会对 opener 发一条
+        // `closing`，紧接着新文档才完成加载并回 `ready`。
+        //
+        // 这两条消息来自**同一个** WindowProxy（浏览器复用窗口名），仅靠
+        // `event.source === this.popup` 无法区分"旧文档 closing"与"新文档
+        // closing"。如果我们在 `opening` 阶段就收这条 `closing`，会把当前
+        // 正在建立的会话提前 teardown：随后 `ready` 虽然能到达，但
+        // `this.popup` / `this.dispatcher` 已被清空，调用方就会落到
+        // "Popup was closed before sending request" 这类假失败。
+        //
+        // 因此规则收紧为：
+        //   - `opening` 阶段收到 `closing`：忽略，继续等待本轮 `ready`；
+        //   - 进入 `connected` 后收到 `closing`：才视为当前会话真正结束。
+        //
+        // 如果用户真的在 `opening` 阶段手工把 popup 关掉，close poller /
+        // ready timeout 仍会收口；不需要靠这条 `closing` 提前判死。
+        if (this.state === "opening") {
+          this.log("closing_received", { ignored: true, phase: "opening" }, "ignored stale closing while opening");
+          return;
+        }
         this.log("closing_received", undefined, undefined);
         this.handleSessionClosedByServer("closing");
       }

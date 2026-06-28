@@ -18,14 +18,11 @@ export const messages: Messages = {
     "app.brand": "Keymaster Notes",
     "app.demoName": "Notes Demo",
     "app.demoDescription":
-      "Encrypted notes workspace that actually calls identity.get and cipher.* on the Keymaster provider.",
+      "Encrypted notes workspace built on connect session and cipher.* — actually calls connect.* + cipher.* on the Keymaster provider.",
     // ----- Lock screen -----
     "lock.subtitle":
-      "An encrypted notes workspace built on identity.get and cipher.*. All note content is encrypted by the Keymaster provider; this demo only consumes the protocol.",
+      "An encrypted notes workspace built on connect.session and cipher.*. All note content is encrypted by the Keymaster provider; this demo only consumes the protocol.",
     "lock.capabilities.title": "Required protocol capabilities",
-    "lock.capabilities.identity.get": "identity.get",
-    "lock.capabilities.identity.get.desc":
-      "Open the Keymaster popup and fetch identity plus publicKey.",
     "lock.capabilities.cipher.encrypt":
       "cipher.encrypt",
     "lock.capabilities.cipher.encrypt.desc":
@@ -34,6 +31,15 @@ export const messages: Messages = {
       "cipher.decrypt",
     "lock.capabilities.cipher.decrypt.desc":
       "Decrypt the ciphertext back into plain markdown when opening a note.",
+    "lock.capabilities.connect.login": "connect.login",
+    "lock.capabilities.connect.login.desc":
+      "Sign in and select a key; the session is bound to that key and is used by every later cipher call.",
+    "lock.capabilities.connect.resume": "connect.resume",
+    "lock.capabilities.connect.resume.desc":
+      "Restore the previously authorized session after refresh, popup close, or transport reconnect.",
+    "lock.capabilities.connect.logout": "connect.logout",
+    "lock.capabilities.connect.logout.desc":
+      "Explicitly revoke the current session. Only this path returns the user to the sign-in shell.",
     "lock.field.target.label": "Target origin / URL",
     "lock.field.target.placeholder": "e.g. {defaultOrigin}",
     "lock.field.target.hint.invalid":
@@ -46,8 +52,19 @@ export const messages: Messages = {
     "lock.action.login": "Sign in",
     "lock.action.login.submitTitle": "Please enter a target origin / URL",
     "lock.action.login.opening": "Opening popup...",
+    "lock.action.resume": "Resume session",
+    "lock.action.resume.opening": "Resuming session...",
+    "lock.action.forget": "Forget current session",
+    "lock.action.forget.title":
+      "Forget the current connect session on this device and return to the sign-in shell",
+    "lock.status.resuming": "Resuming session...",
+    "lock.status.resuming.description":
+      "A previously authorized connect session is being restored. You may be asked to unlock the popup.",
+    "lock.status.resumeFailed": "Resume failed",
+    "lock.status.resumeFailed.description":
+      "The saved session is no longer valid. Please sign in again to obtain a new session.",
     "lock.footer":
-      "This demo does not persist your identity: refreshing the page returns here. After signing in, notes data is saved locally partitioned by the current owner's publicKey.",
+      "The demo persists the connect session id (no password, no popup unlock material). On refresh it tries to resume the session first; explicit logout returns to the sign-in shell. Notes data is partitioned locally by the bound owner's publicKey.",
     // ----- Header -----
     "header.theme.label": "Theme",
     "header.theme.dark": "Dark",
@@ -70,12 +87,27 @@ export const messages: Messages = {
     "connect.row.publicKey": "publicKey",
     "connect.row.lastLogin": "last login",
     "connect.row.publicKey.empty": "Not signed in",
+    "connect.row.sessionId": "sessionId",
+    "connect.row.sessionId.empty": "No session",
     "connect.action.login": "Sign in again",
+    "connect.action.login.title":
+      "Start a brand-new connect.login flow; this abandons the current resume attempt",
+    "connect.action.resume": "Resume session",
+    "connect.action.resume.title":
+      "Re-open the popup and call connect.resume with the saved sessionId",
     "connect.action.forget": "Switch identity / change provider",
     "connect.action.forget.title": "Return to login shell; local data is kept",
     "connect.action.delete": "Delete current local data",
     "connect.action.delete.title":
       "Delete all local notes data for the current publicKey and exit the workspace; the Keymaster identity itself is not removed",
+    "connect.action.logout": "Sign out",
+    "connect.action.logout.title":
+      "Call connect.logout to revoke the current session and return to the sign-in shell",
+    "connect.action.logout.dialogTitle": "Sign out of this session?",
+    "connect.action.logout.dialogMessage":
+      "The connect session will be revoked on the Keymaster side and removed from this device. Local notes data is not deleted by this action.",
+    "connect.action.logout.confirm": "Sign out",
+    "connect.action.logout.cancel": "Cancel",
     // ----- Sidebar -----
     "sidebar.owner.eyebrow": "Notes",
     "sidebar.owner.empty": "Not signed in",
@@ -226,6 +258,10 @@ export const messages: Messages = {
       "Save failed: ",
     "app.error.cannotSaveTitleConflictWithName":
       'Save failed: a note named "{name}" already exists in the current folder.',
+    "app.error.connectSessionInvalid":
+      "The saved connect session is no longer valid. Please sign in again.",
+    "app.error.connectLogoutFailed":
+      "Sign-out failed. The local session has been cleared anyway; if the server still holds it, you can resume once and then sign out again.",
     "app.banner.decryptFailed":
       "Current note failed to decrypt: {error}. Editing is locked; delete this note or switch back to the original origin / active key and retry.",
     "app.banner.moveMode":
@@ -268,8 +304,8 @@ export const messages: Messages = {
     "app.defaultFolderBaseName": "New folder",
     "app.encrypt.requestText":
       "Encrypt current note markdown for Notes Demo",
-    "app.identity.requestText":
-      "Provide identity to Notes Demo to unlock encrypted notes",
+    "app.connect.login.requestText":
+      "Start a connect session for Notes Demo and bind it to the selected key",
     "drag.reason.drop_to_note": "Cannot drop onto a note.",
     "drag.reason.drop_to_self":
       "Cannot move a folder into itself.",
@@ -285,14 +321,11 @@ export const messages: Messages = {
     "app.brand": "Keymaster Notes",
     "app.demoName": "Notes Demo",
     "app.demoDescription":
-      "真实调用 identity.get 与 cipher.* 的加密笔记工作区。",
+      "基于 connect session 与 cipher.* 的加密笔记工作区——真实调用 connect.* + cipher.*。",
     // ----- Lock screen -----
     "lock.subtitle":
-      "一个使用 identity.get 与 cipher.* 的加密笔记工作区。所有正文真值由 Keymaster 提供方负责加解密，本 demo 仅做协议调用方。",
+      "一个使用 connect session 与 cipher.* 的加密笔记工作区。所有正文真值由 Keymaster 提供方负责加解密，本 demo 仅做协议调用方。",
     "lock.capabilities.title": "依赖的协议能力",
-    "lock.capabilities.identity.get": "identity.get",
-    "lock.capabilities.identity.get.desc":
-      "拉起登录器 popup，取回身份与 publicKey。",
     "lock.capabilities.cipher.encrypt":
       "cipher.encrypt",
     "lock.capabilities.cipher.encrypt.desc":
@@ -301,6 +334,15 @@ export const messages: Messages = {
       "cipher.decrypt",
     "lock.capabilities.cipher.decrypt.desc":
       "打开 note 时把密文还原为 markdown 明文。",
+    "lock.capabilities.connect.login": "connect.login",
+    "lock.capabilities.connect.login.desc":
+      "首次登录并选择 key；该 session 会绑定到这把 key，后续所有 cipher 调用都走这把 key。",
+    "lock.capabilities.connect.resume": "connect.resume",
+    "lock.capabilities.connect.resume.desc":
+      "页面刷新、popup 关闭重开、transport 重连后，用本地 sessionId 恢复已授权的 session。",
+    "lock.capabilities.connect.logout": "connect.logout",
+    "lock.capabilities.connect.logout.desc":
+      "显式吊销当前 session；只有这一条路径会把 caller 退回登录页。",
     "lock.field.target.label": "Target origin / URL",
     "lock.field.target.placeholder": "例如 {defaultOrigin}",
     "lock.field.target.hint.invalid":
@@ -313,8 +355,18 @@ export const messages: Messages = {
     "lock.action.login": "登录",
     "lock.action.login.submitTitle": "请输入 target origin / URL",
     "lock.action.login.opening": "拉起 popup...",
+    "lock.action.resume": "恢复 session",
+    "lock.action.resume.opening": "正在恢复 session...",
+    "lock.action.forget": "忘掉当前 session",
+    "lock.action.forget.title": "忘掉本机保存的 connect session，回到登录页",
+    "lock.status.resuming": "正在恢复 session...",
+    "lock.status.resuming.description":
+      "正在恢复已授权的 connect session；popup 可能要求输入密码解锁。",
+    "lock.status.resumeFailed": "恢复失败",
+    "lock.status.resumeFailed.description":
+      "本地保存的 session 已失效。请重新登录以获取新 session。",
     "lock.footer":
-      "本 demo 不会持久化身份：刷新页面后会回到这里。一旦登录，notes 数据按当前 owner 的 publicKey 本地分区保存。",
+      "本 demo 仅持久化 connect sessionId（不持久化密码、不持久化 popup 解锁态）。刷新页面时优先尝试 resume；只有显式 logout 才会退回登录页。Notes 数据按绑定 owner 的 publicKey 本地分区保存。",
     // ----- Header -----
     "header.theme.label": "主题",
     "header.theme.dark": "黑",
@@ -337,12 +389,24 @@ export const messages: Messages = {
     "connect.row.publicKey": "publicKey",
     "connect.row.lastLogin": "last login",
     "connect.row.publicKey.empty": "未登录",
+    "connect.row.sessionId": "sessionId",
+    "connect.row.sessionId.empty": "无 session",
     "connect.action.login": "重新登录",
+    "connect.action.login.title": "从头走一次 connect.login；放弃当前 resume 尝试",
+    "connect.action.resume": "恢复 session",
+    "connect.action.resume.title": "重开 popup 并用本地 sessionId 调 connect.resume",
     "connect.action.forget": "切换身份 / 更换登录器",
     "connect.action.forget.title": "退回登录壳；不删除本地数据",
     "connect.action.delete": "删除当前本地数据",
     "connect.action.delete.title":
       "删除当前 publicKey 对应的全部本地 notes 数据并退出工作区；不会删除 Keymaster 身份本身",
+    "connect.action.logout": "退出登录",
+    "connect.action.logout.title": "调 connect.logout 吊销当前 session 并退回登录壳",
+    "connect.action.logout.dialogTitle": "确认退出当前 session？",
+    "connect.action.logout.dialogMessage":
+      "会在服务端吊销当前 connect session，并从本机移除该 session。Notes 本地数据不会被这次操作删除。",
+    "connect.action.logout.confirm": "退出登录",
+    "connect.action.logout.cancel": "取消",
     // ----- Sidebar -----
     "sidebar.owner.eyebrow": "Notes",
     "sidebar.owner.empty": "未登录",
@@ -485,6 +549,9 @@ export const messages: Messages = {
     "app.error.cannotSaveTitleConflict": "保存失败：",
     "app.error.cannotSaveTitleConflictWithName":
       "保存失败：当前目录下已有同名 note \"{name}\"。",
+    "app.error.connectSessionInvalid": "本地保存的 connect session 已失效，请重新登录。",
+    "app.error.connectLogoutFailed":
+      "退出登录失败。本地 session 已先清掉；若服务端 session 仍在，下次恢复后请再次退出登录。",
     "app.banner.decryptFailed":
       "当前 note 解密失败：{error}。已锁定编辑；可删除本条或切回原 origin / active key 后重试。",
     "app.banner.moveMode": "移动模式：点击目标文件夹或根目录完成移动。",
@@ -523,7 +590,7 @@ export const messages: Messages = {
     "app.defaultNoteBaseName": "新 note",
     "app.defaultFolderBaseName": "新文件夹",
     "app.encrypt.requestText": "向 Notes Demo 加密当前 note 的 markdown",
-    "app.identity.requestText": "向 Notes Demo 提供身份以解锁加密笔记",
+    "app.connect.login.requestText": "为 Notes Demo 建立 connect session 并绑定到选定的 key",
     "drag.reason.drop_to_note": "不能把内容拖到 note 上。",
     "drag.reason.drop_to_self": "不能把文件夹拖到自己内部。",
     "drag.reason.drop_to_descendant": "不能把文件夹拖到自己的后代下面。",
@@ -536,14 +603,11 @@ export const messages: Messages = {
     "app.brand": "Keymaster Notes",
     "app.demoName": "Notes Demo",
     "app.demoDescription":
-      "identity.get と cipher.* を実際に呼び出す暗号化ノートワークスペース。",
+      "connect session と cipher.* による暗号化ノートワークスペース。実体は connect.* + cipher.* を呼び出します。",
     // ----- Lock screen -----
     "lock.subtitle":
-      "identity.get と cipher.* を使った暗号化ノートワークスペース。本体の内容はすべて Keymaster プロバイダが暗号化／復号し、本デモはプロトコルの呼び出し側だけです。",
+      "connect session と cipher.* を使った暗号化ノートワークスペース。本体の内容はすべて Keymaster プロバイダが暗号化／復号し、本デモはプロトコルの呼び出し側だけです。",
     "lock.capabilities.title": "依存するプロトコル機能",
-    "lock.capabilities.identity.get": "identity.get",
-    "lock.capabilities.identity.get.desc":
-      "Keymaster のポップアップを開き、identity と publicKey を取得します。",
     "lock.capabilities.cipher.encrypt":
       "cipher.encrypt",
     "lock.capabilities.cipher.encrypt.desc":
@@ -552,6 +616,15 @@ export const messages: Messages = {
       "cipher.decrypt",
     "lock.capabilities.cipher.decrypt.desc":
       "ノートを開くときに暗号文を平文 markdown に復号します。",
+    "lock.capabilities.connect.login": "connect.login",
+    "lock.capabilities.connect.login.desc":
+      "初回ログインし key を選択。その session はその key に紐付けられ、以降の cipher.* 呼び出しはこの key を使用します。",
+    "lock.capabilities.connect.resume": "connect.resume",
+    "lock.capabilities.connect.resume.desc":
+      "ページ再読み込み、ポップアップ再起動、transport 再接続後、保存済み sessionId で認可済み session を復元します。",
+    "lock.capabilities.connect.logout": "connect.logout",
+    "lock.capabilities.connect.logout.desc":
+      "現在の session を明示的に失効させます。サインイン画面に戻すのはこの経路だけです。",
     "lock.field.target.label": "Target origin / URL",
     "lock.field.target.placeholder": "例：{defaultOrigin}",
     "lock.field.target.hint.invalid":
@@ -566,8 +639,19 @@ export const messages: Messages = {
     "lock.action.login.submitTitle":
       "target origin / URL を入力してください",
     "lock.action.login.opening": "ポップアップを開いています...",
+    "lock.action.resume": "session を再開",
+    "lock.action.resume.opening": "session を再開しています...",
+    "lock.action.forget": "現在の session を破棄",
+    "lock.action.forget.title":
+      "この端末に保存された connect session を破棄し、サインイン画面に戻ります",
+    "lock.status.resuming": "session を再開しています...",
+    "lock.status.resuming.description":
+      "認可済みの connect session を復元中です。ポップアップでパスワード入力が必要になることがあります。",
+    "lock.status.resumeFailed": "再開に失敗しました",
+    "lock.status.resumeFailed.description":
+      "保存済みの session は無効です。再度サインインして新しい session を取得してください。",
     "lock.footer":
-      "本デモは identity を永続化しません。ページを再読み込みするとここに戻ります。ログイン後、ノートデータは現在のオーナーの publicKey でローカルにパーティション化されて保存されます。",
+      "本デモが永続化するのは connect sessionId のみです（パスワードも popup のアンロック素材も保存しません）。再読み込み時はまず resume を試み、明示的な logout だけがサインイン画面に戻します。ノートデータはバインドされたオーナーの publicKey でローカルにパーティション化されます。",
     // ----- Header -----
     "header.theme.label": "テーマ",
     "header.theme.dark": "ダーク",
@@ -590,13 +674,28 @@ export const messages: Messages = {
     "connect.row.publicKey": "publicKey",
     "connect.row.lastLogin": "last login",
     "connect.row.publicKey.empty": "未ログイン",
+    "connect.row.sessionId": "sessionId",
+    "connect.row.sessionId.empty": "session なし",
     "connect.action.login": "再ログイン",
+    "connect.action.login.title":
+      "connect.login を最初からやり直します。現在の resume 試行は破棄されます。",
+    "connect.action.resume": "session を再開",
+    "connect.action.resume.title":
+      "ポップアップを開き直し、保存済み sessionId で connect.resume を呼びます",
     "connect.action.forget": "ID を切り替える / プロバイダを変更",
     "connect.action.forget.title":
       "ログイン画面に戻ります。ローカルデータは削除しません。",
     "connect.action.delete": "現在のローカルデータを削除",
     "connect.action.delete.title":
       "現在の publicKey のローカル notes データをすべて削除してワークスペースを終了します。Keymaster ID そのものは削除されません。",
+    "connect.action.logout": "サインアウト",
+    "connect.action.logout.title":
+      "connect.logout を呼び、現在の session を失効させてログイン画面に戻ります",
+    "connect.action.logout.dialogTitle": "現在の session からサインアウトしますか？",
+    "connect.action.logout.dialogMessage":
+      "Keymaster 側で現在の connect session を失効させ、この端末からも削除します。この操作ではローカル notes データは削除されません。",
+    "connect.action.logout.confirm": "サインアウト",
+    "connect.action.logout.cancel": "キャンセル",
     // ----- Sidebar -----
     "sidebar.owner.eyebrow": "Notes",
     "sidebar.owner.empty": "未ログイン",
@@ -754,6 +853,10 @@ export const messages: Messages = {
     "app.error.cannotSaveTitleConflict": "保存失敗：",
     "app.error.cannotSaveTitleConflictWithName":
       "保存失敗：現在のフォルダに同名の note \"{name}\" が存在します。",
+    "app.error.connectSessionInvalid":
+      "ローカルに保存された connect session は無効です。再度サインインしてください。",
+    "app.error.connectLogoutFailed":
+      "サインアウトに失敗しました。ローカル session は先にクリアされています。サーバ側に残っている場合は一度 resume してから再度サインアウトしてください。",
     "app.banner.decryptFailed":
       "現在の note は復号に失敗しました：{error}。編集はロックされています。この note を削除するか、元の origin / active key に戻して再試行してください。",
     "app.banner.moveMode":
@@ -798,8 +901,8 @@ export const messages: Messages = {
     "app.defaultFolderBaseName": "新規フォルダ",
     "app.encrypt.requestText":
       "現在の note の markdown を Notes Demo 向けに暗号化",
-    "app.identity.requestText":
-      "暗号化ノートを解除するために Notes Demo に ID を提供",
+    "app.connect.login.requestText":
+      "Notes Demo 用の connect session を確立し、選択した key に紐付けます",
     "drag.reason.drop_to_note": "note にドロップすることはできません。",
     "drag.reason.drop_to_self":
       "フォルダを自分自身の下には移動できません。",

@@ -9,18 +9,40 @@
 
 我们只做一件事：证明一个最小外部站点能
 
-- 用 `identity.get` 拉起 Keymaster popup 并取回身份；
-- 用 `cipher.encrypt` / `cipher.decrypt` 真实加解密笔记正文；
+- 用 `connect.login` 拉起 Keymaster popup 完成首次登录并选定 key；
+- 用 `connect.resume` 在页面刷新、popup 关闭重开、transport 抖动时恢复已授权的 session；
+- 用 `connect.logout` 显式吊销 session 并退回登录壳；
+- 用 `cipher.encrypt` / `cipher.decrypt` 真实加解密笔记正文（按 session 绑定 key 执行，**不**依赖全局 active key）；
 - 用 folder/note 显式实体管理笔记结构；
-- 把密文 + 元数据落到本地 KV；
+- 把密文 + 元数据落到本地 KV（按 session 绑定 owner 分区）；
 - 在不缓存明文的前提下，仍能保持"打开 → 编辑 → 保存"的闭环；
 - 让用户选择**任意实现相同协议**的登录器（不再写死 Keymaster）。
+
+## 登录真值：connect session（硬切换后的明确产品定义）
+
+登录真值 = `connectSessionId`。owner 真值 = session 绑定的 `ownerPublicKeyHex`。
+**不再**把 `identity.get` 当长期登录真值；**不再**靠 popup 窗口是否活着判断是否已登录。
+
+### 行为定义
+
+- 首次登录 → `connect.login`：popup 解锁 → 选 key → 返回 sessionId + ownerPublicKeyHex。
+- 页面刷新 / popup refresh / transport 断线 → `connect.resume`：若 session
+  仍在，只要求输入密码恢复 unlock，**不**重新选 key，**不**重新登录。
+- 用户主动退出 → `connect.logout`：服务端吊销 + 清本地 session，回登录壳。
+- 任何**非显式**路径（transport 抖动、popup 关闭、主站切 active key）都**不**清
+  session；只把 transport 状态置为 `disconnected`，下次协议请求时优先 `resume`。
+
+### 持久化边界
+
+- 本地**只**持久化 `connectSessionRecord = { sessionId, ownerPublicKeyHex, targetOrigin, claimsSnapshot, resolvedAt }`。
+- **不**持久化 popup transport 句柄、popup 解锁运行时、用户密码。
+- popup 当前文档刷新后必须重新输入密码恢复 unlock。
 
 ## 页面结构（硬切换后）
 
 页面顶层固定两态：
 
-- 未登录：渲染 `LockScreen`（登录壳）。
+- 未登录：渲染 `LockScreen`（登录壳 / 恢复中 / 恢复失败 三种 mode）。
 - 已登录：渲染 `Notes` 工作区。
 
 不允许出现"未登录但显示 notes 工作区外壳"或"已登录但不渲染任何笔记内容"的
@@ -32,13 +54,19 @@
 
 - 产品介绍 + 协议能力说明；
 - 用户输入或确认 `target origin / url`；
+- **根据 `mode` 区分**三种状态：
+  - `"login"`：没有本地 session，显示真正登录入口；
+  - `"resume"`：有本地 session，正在自动 / 手动 resume，提示用户等待；
+  - `"resumeFailed"`：resume 失败 / 跨 origin / 本地记录损坏，显示"会话已失效，
+    请重新登录"。
+- 有本地 session 且 targetOrigin 一致时，提供"恢复 session" + "忘掉当前 session"两个入口。
 - 大号登录按钮 + 最近错误展示。
 
 明确不展示任何 owner 数据摘要、文件树预览、最近登录记录。
 
 ### Notes 工作区
 
-只在 `identity !== null` 时渲染。硬切换后的页面结构：
+只在 `session !== null` 时渲染。硬切换后的页面结构：
 
 ```
 app-header
@@ -62,8 +90,10 @@ workspace         ← 二栏 grid：sidebar | document-panel
 
 页头 `ConnectStatus` 不再展示错误横条（已上收至 `app-banner`），仅承担：
 
-- `page origin` / `target origin` / `publicKey` / `last login` 信息；
-- 重新登录按钮；
+- `page origin` / `target origin` / `publicKey` / `sessionId` / `last login` 信息；
+- **恢复 session** 按钮（用本地 sessionId 调 `connect.resume`）；
+- **重新登录** 按钮（从头走一次 `connect.login`，放弃当前 resume 尝试）；
+- **退出登录** 按钮（调 `connect.logout` 吊销 session 并清本地，回 LockScreen）；
 - **切换身份 / 更换登录器** 按钮，点击后立即退回 LockScreen，并清空内存中
   notes 工作区态（selection / draft / drag / move / 解密缓存 / pendingDrafts 等），
   但**不**删除 localStorage 中已有 owner 分区数据。
@@ -154,13 +184,15 @@ npm run preview      # 预览生产构建
 
 ## 依赖的 Keymaster 能力
 
-本 demo 只调用三个方法：
+本 demo 调用以下协议方法：
 
 | 方法 | 用途 |
 |---|---|
-| `identity.get` | 登录入口；拿到 `subject.publicKey` + 选定的 profile claims |
-| `cipher.encrypt` | 保存 note 时把 markdown UTF-8 字节加密为 nonce + cipherbytes |
-| `cipher.decrypt` | 打开 note 时把密文还原为 markdown 明文 |
+| `connect.login` | 首次登录入口；用户选 key；返回 `connectSessionId + ownerPublicKeyHex + claimsSnapshot` |
+| `connect.resume` | 恢复已授权的 session；不重新选 key；命中"需要解锁"时只要求输入密码 |
+| `connect.logout` | 显式吊销 session；服务端吊销后回登录壳 |
+| `cipher.encrypt` | 保存 note 时把 markdown UTF-8 字节加密为 nonce + cipherbytes；按 session 绑定 key 执行 |
+| `cipher.decrypt` | 打开 note 时把密文还原为 markdown 明文；按 session 绑定 key 执行 |
 
 不接入 `intent.sign` / `p2pkh.transfer` / `feepool.*` 等其它能力。
 
@@ -182,23 +214,40 @@ LockScreen 上允许用户输入任意 `target origin / url`：
 - 协议能力自动探测；
 - popup path 之外的路由发现。
 
-## 刷新行为（硬切换的明确产品定义）
+## 刷新行为（硬切换后的明确产品定义）
 
 刷新页面后：
 
-- 回到 `LockScreen`；
-- 不恢复 identity；
-- 不加载任何 owner 的 notes 空间。
+- notes demo 读取本地 `connectSessionRecord`；
+- 若**有**本地 sessionId 且 `targetOrigin` 与当前一致 → 自动 `connect.resume`：
+  - session 仍在 → 直接进入工作区；
+  - popup 当前未解锁 → 只要求输入密码；
+  - 不重新选 key，不重新登录。
+- 若**无**本地 sessionId / session 无效 / 跨 origin → 退回 `LockScreen`。
+
+popup refresh 后只丢 unlock runtime：
+
+- 不丢 connect session；
+- 下次 notes 触发协议请求时 `connect.resume`，要求输入密码；
+- 不回登录壳。
+
+transport 断开后：
+
+- 仅更新 transport 状态为 `disconnected`；
+- **不**立即清本地 sessionId；
+- **不**立即清 owner 分区；
+- 下次需要协议请求时优先重建 popup 并 `resume`。
 
 这是硬切换后的明确产品定义，不是缺陷。本 demo **不**支持：
 
-- identity 快照持久化；
-- 页面启动自动恢复 identity；
-- "未登录但显示上次 owner 文件树"的半状态。
+- 把 `identity.get` 当长期登录真值；
+- 把 popup transport 窗口是否还活着当成 auth session 是否还活着；
+- "未登录但显示上次 owner 文件树"的半状态；
+- 跨 origin 复用 session（必须重新 login）。
 
 ## owner 分区边界
 
-notes 数据空间只按 `ownerPublicKeyHex` 分区：
+notes 数据空间只按 session 绑定的 `ownerPublicKeyHex` 分区：
 
 ```txt
 notes-demo:owner:{publicKeyHex}
@@ -362,76 +411,90 @@ record 自身不重复携带 owner。
 2. 打开页面，应**只**看到 `LockScreen`：没有文件树、没有编辑器、没有 inspector；
 3. LockScreen 上有 `target origin / url` 输入框 + "使用默认地址" 按钮 + 大号登录按钮；
 4. 输入默认 `https://keymaster.cc` → 点击 **登录** → 浏览器弹出 Keymaster popup；
-5. 在 Keymaster 弹窗里确认身份请求；
-6. 回到页面 → 已进入 notes 工作区，看到 `subject.publicKey` 摘要 + last login 时间 +
-   当前 `target origin`；
+5. 在 Keymaster 弹窗里若未解锁先输入密码 → 解锁后选 key 并确认；
+6. 回到页面 → 已进入 notes 工作区，看到 `publicKey` 摘要 + `sessionId` 摘要 +
+   last login 时间 + 当前 `target origin`；
 7. 左侧点击 **+ 文件夹** → 根目录下出现新文件夹；
 8. 在文件夹上右键 → 选 `新建 note`；
 9. 编辑区顶部输入文件名；正文输入段落与列表；
 10. 右侧面板把 tags 字段填入 `demo, keymaster`；
-11. 点击 **加密保存** → 触发 `cipher.encrypt`；
-12. **刷新页面** → 应回到 `LockScreen`，左侧树不显示旧数据；
-13. 重新登录 → 同一 owner 的 folder + note 树出现；
-14. 点击 note → 触发 `cipher.decrypt` → 编辑器回到原内容；
+11. 点击 **加密保存** → 触发 `cipher.encrypt`（带 `connectSessionId`）；
+12. **刷新页面** → 锁屏层短暂显示"正在恢复 session"，然后自动进入工作区；
+13. 重新进入工作区后，左侧树仍显示原 owner 的 folder + note 树；
+14. 点击 note → 触发 `cipher.decrypt`（带 `connectSessionId`）→ 编辑器回到原内容；
 15. 右键 note → `删除` → 从树消失；
 16. 在 popup 内取消身份请求 → 页面应显示 `user_rejected` 错误；
 17. 切换 target origin 模拟 `decrypt_failed`：在 Keymaster 内切走 active key
     或在不同 origin 重新打开 → note 列表仍显示，但点击后进入"无法解密"态；
 18. 在根目录放一个文件夹 + 它的子 note，拖拽 note 到另一文件夹 → 应移动成功；
 19. 输入 `not a url` 这种非法值 → 登录按钮应被禁用，提示 `Target origin 非法。`；
-20. 已登录态点击 **切换身份 / 更换登录器** → 立即回到 `LockScreen`，
+20. 已登录态点击 **退出登录** → 调 `connect.logout` → 服务端吊销 session →
+    退回 `LockScreen`，本地 session 已清；notes 工作区态清空但 owner 本地数据仍保留；
+21. 已登录态点击 **切换身份 / 更换登录器** → 立即回到 `LockScreen`，
     当前编辑区 / 选中态 / draft / 拖拽态全部清空，但 localStorage 原 owner 数据仍保留；
-21. 已登录态点击 **删除当前本地数据** → 弹二次确认框（明确说明只删本地数据、
+22. 已登录态点击 **删除当前本地数据** → 弹二次确认框（明确说明只删本地数据、
     不删 Keymaster 身份）→ 确认 → 退回 `LockScreen`；再次登录同一 owner 应看到空树，
     原数据**不**再恢复；
-22. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
+23. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
     相同协议）→ 登录 → 应能进入 notes 工作区，与默认 origin 行为一致；
-23. note 打开链路验收：连续快速点击未解密 note A → B → C，前端应**立即**对
+24. note 打开链路验收：连续快速点击未解密 note A → B → C，前端应**立即**对
     A、B 各发一条 `cancel`（在浏览器 devtools / `console.debug` 里能看到
     `cancel_sent` 日志），并立即为每条目标发新的 `cipher.decrypt`；
     最终停留在 C 的 editor；A、B 的晚回结果不应出现在 UI 上；
-24. note → folder / root 切换：当前 note 还在 loading 时点 folder / root，
-    应触发 `cancel_sent`、清空 editor、回到 folder / root 占位。
+25. note → folder / root 切换：当前 note 还在 loading 时点 folder / root，
+    应触发 `cancel_sent`、清空 editor、回到 folder / root 占位；
+26. popup refresh 后恢复：刷新 popup 触发 unlock runtime 失效 → 锁屏层 / 页头
+    显示 transport `disconnected` → 用户点 **恢复 session** → popup 要求输入密码
+    → 解锁后继续工作区，**不**回到登录壳，**不**重新选 key；
+27. 跨 origin 处理：登录后改 `targetOrigin` → 锁屏层显示"恢复失败，请重新登录"
+    → 旧 session 已清 → 用户重新 login；
+28. active key 切换：在 Keymaster 主站切换 active key → notes 不受影响 →
+    继续用 session 绑定 owner → 打开 / 保存 / 解密都不漂移到新 active key。
 
 ## 异常行为对照表
 
 | 情况 | 行为 |
 |---|---|
 | popup 被浏览器拦截 | 顶栏明确报错；不做自动重试 |
-| `ready_timeout` | 当前 session 作废；用户可手动再试 |
+| `ready_timeout` | 当前 transport 作废；用户可手动点 "恢复 session" 再试 |
 | `result_timeout` | 单条 request 失败；用户可再次发起 |
-| `user_rejected` | UI 明确显示；不写入任何半成功状态 |
-| `active_key_unavailable` | 顶栏显示原因；不写本地 |
+| `user_rejected`（login / resume / logout / cipher） | UI 明确显示；不写入任何半成功状态；**不**清本地 session（除非是 logout） |
+| `active_key_unavailable`（cipher 路径） | 顶栏显示原因；不写本地；session 仍保留，提示用户去 Keymaster 主站激活 |
 | `decrypt_failed` | note 仍显示；点击进入"无法解密"页；**不**清空密文 |
+| `connect.resume` 返回 session 无效（吊销 / 绑定 key 已删） | 清本地 session；锁屏显示"恢复失败，请重新登录" |
+| `connect.resume` 命中"需要解锁" | popup 走 unlock UI；解锁后继续原 session；**不**回登录壳 |
 | popup 在多个 pending request 存在时被关闭 | transport 批量 reject **全部** pending；只有仍属于"当前 note + 当前代际"的那条会被展示为解密失败，其它一律静默 |
 | 快速切 note 时 `cancel` 被协议忽略（旧请求已 `executing`） | 新 note 仍正常打开；旧请求晚回结果按代际隔离丢弃；**不**把新 note 误标失败 |
 | title（文件名）为空 | 保存前阻断；精确提示 |
 | folder / note 重名 | 保存 / 移动前阻断；提示用户改名或换目标 |
 | 非空文件夹删除 | 弹提示框阻断；不递归强删 |
 | 拖到非法目标 | 不执行移动；轻量错误提示 |
+| 用户在 popup 关闭期间点 "退出登录" | 走 best-effort `logout`；失败时本地先清，按"无法确认服务端吊销"分支让用户后续 resume 收敛 |
+| 切换 `targetOrigin`（已在登录态改 origin） | 旧 connect session 视为跨 origin 失效；清本地 session；退回登录壳 |
 
 ## 项目结构
 
 ```
 src/
   lib/
-    protocol.ts          # 协议类型收口（仅 identity.get + cipher.*）
+    protocol.ts          # 协议类型收口（connect.* + cipher.* + 可选 session-bound identity.get）
     connectClient.ts     # popup transport 原子能力 + normalizeOrigin
-    popupSessionClient.ts# 页面级 popup session client
+    popupSessionClient.ts# 页面级 popup session client（仅 transport 真值）
     encoding.ts          # UTF-8 / base64 / hex
     binary.ts            # BinaryField 转换
-    keymaster.ts         # 业务 ↔ 协议收口
+    keymaster.ts         # 业务 ↔ 协议收口（含 connect.* builder / parser）
     path.ts              # 树构建 / 拖拽合法性 / 根虚拟节点
     notes.ts             # folder/note record schema + tag/title 规则
     storage.ts           # owner 分区 KV + folder/note CRUD + 冲突检查
+                         # + connect session 本地记录存取
   components/
-    LockScreen.tsx       # 未登录态登录壳（产品介绍 + target origin 输入 + 登录按钮）
-    ConnectStatus.tsx    # 已登录态顶栏连接状态 + 重新登录 / 切换身份（不再展示错误横条）
+    LockScreen.tsx       # 登录壳 + 恢复中 + 恢复失败（mode 三态）
+    ConnectStatus.tsx    # 已登录态顶栏 + sessionId / 恢复 / 退出登录 按钮
     NotesSidebar.tsx     # 左侧 folder/note 树 + 右键菜单 + 拖拽 + 简化 folder 工具条
     NoteEditor.tsx       # BlockNote 包装（markdown 单真值）
     DocumentToolbar.tsx  # 文档区顶部 Notion 风格两排工具条（tag + 状态 + 动作）
-  App.tsx                # 状态真值集中地 + LockScreen / Notes 二段式渲染
-                         # + app-banner（应用级提示）+ 窄屏文件树开合状态
+  App.tsx                # connect session 状态机 + LockScreen / Notes 二段式渲染
+                         # + 自动 resume 流程 + app-banner + 窄屏文件树开合状态
   main.tsx               # 挂载入口
   styles.css             # LockScreen 样式 + 工作区样式 + banner / toolbar / 响应式
 ```
@@ -475,3 +538,14 @@ src/
 - 不把 `saveOverlay` 降级为普通 banner（仍是阻塞遮罩）；
 - 不顺手做 Office 式富文本工具条（粗体 / 标题 / 列表等按钮不进 `document-toolbar`）；
 - 不为窄屏另造一套业务状态机（开合态与桌面共用同一份 selection / editor 真值）。
+
+### connect session 硬切换的额外边界（2026-06-28 001）
+
+- 不继续把 `identity.get` 当 notes demo 的长期登录真值。
+- 不继续把 popup transport 窗口是否还活着当成 auth session 是否还活着。
+- 不在本地持久化用户密码或 popup 解锁运行时材料。
+- 不让 `cipher.*` 不带 `connectSessionId`（必须按 session 绑定 key 执行）。
+- 不在 popup transport 抖动时直接清掉本地 `connectSessionId`。
+- 不在 session 绑定 key 失效时自动换成另一把 key 继续工作。
+- 不让 `resume` 重新选 key / 重新走 login。
+- 不让 logout 只做本地清空而不调 `connect.logout`。

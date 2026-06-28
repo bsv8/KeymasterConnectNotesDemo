@@ -7,65 +7,32 @@
 //          施工单 2026-06-27 notion-document-toolbar-and-mobile-sidebar
 //          第 3 / 4 / 5 / 6 章 +
 //          施工单 2026-06-27 note-search-results-and-tree-expand-persistence
-//          第 4-11 章）：
-//   - 顶层固定二态：`identity === null` 时只渲染 `LockScreen`；已登录才渲染工作区。
-//   - **当前编辑内存态单真值**：整页只允许存在一份"当前正在编辑的内存态"
-//     `currentEditorState`。它同时承担：
-//       - 当前正在编辑哪条 note（持久化 note 或尚未落库的新建 note）；
-//       - 当前 title / tags / markdown；
-//       - 当前已保存基线（baseline）；
-//       - 是否 `decryptFailed`。
-//   - **不再**有 `pendingDrafts` 这套并行容器——新建 note 一出现就只活在
-//     `currentEditorState`（`kind: "new"`），第一次成功保存后变 `kind: "persisted"`。
-//   - **不再**有 `decryptedCacheRef`——`baseline.markdown` 就是上次解密缓存的明文。
-//   - **不再**用 effect 监听 `space.notes` 变化来覆盖编辑器：
-//     hydration 只在 selection 真正变化到另一个 note 时跑一次；
-//     save 成功只 patch `currentEditorState.baseline`，不重选 note、不重灌。
-//   - **保存阻塞态**统一收口在 `saveOverlay`：用户点击"加密保存"或"保存并切换"时，
-//     页面进入阻塞遮罩，等待 Keymaster 许可；按钮集合随 mode 区分。
-//   - **切换拦截**：未保存修改时点击其他 note / folder / root，弹"保存并切换"遮罩，
-//     不静默切换；decryptFailed 时直接允许切走（无未保存修改）。
-//   - **新建 note** 默认 title 已存在 + save 立即可点；不向 `space.notes` 写空密文占位。
-//   - **文件树标题**：已保存 note 显示 `space.notes` 的 title；当前未保存新 note
-//     显示 `currentEditorState.title`（以 `ephemeralNote` 形式注入 sidebar）。
-//   - 持久化真值 = `space.folders + space.notes`（localStorage）。
-//   - 退出工作区时统一收口清空内存态（包含 `currentEditorState` / `saveOverlay`）。
-//   - 命名交互：新建文件夹 / 重命名文件夹 / 重命名 note 全部走 `NameInputDialog`；
-//     新建时若重名走自动补编号；重命名时若重名直接阻断。
-//   - **note 打开链路不再串行排队**（施工单 2026-06-27）：
-//       - `openPersistedNote` 不再 `await previous`——切 note 时立即发新 decrypt；
-//       - 旧 pending decrypt 立即 `cancelRequest(oldId)`（fire-and-forget）；
-//       - 业务层只关心"当前打开代际"+"当前正在等的 decrypt requestId"；
-//       - 旧请求晚回来的结果一律丢弃（代际隔离）；
-//       - popup session client 已是 multi-pending，不再有 `session_busy`；
-//       - 当前 note 切到 folder / root / 切换 owner / 退出工作区时，
-//         也要对旧 pending decrypt 发 cancel，并清空代际。
-//   - **硬切换后的工作区布局**（施工单 2026-06-27 notion-document-toolbar）：
-//       - 顶层：header → banner → workspace；
-//       - workspace = sidebar + document-panel 两栏，不再有右栏 inspector；
-//       - document-panel 内部固定 = document-toolbar → document-head →
-//         document-editor；title 回到 document-head；
-//       - 应用级提示（lastError / decryptError / 移动模式）统一进 banner；
-//       - saveOverlay 仍是阻塞遮罩，不被降级成 banner；
-//       - sidebar 内不再保留移动模式横条（搬至 banner）；
-//       - 选中 folder 时 sidebar 根目录上方显示简化 folder 工具条；
-//       - 窄屏下文件树支持手工展开 / 收起；选中 root / folder / note 后自动收起。
-//   - **搜索 / tag 过滤 / 文件树开合的硬切换**（施工单 2026-06-27）：
-//       - sidebar **不再**用 `searchQuery` / `activeTag` 过滤——树永远展示真实完整树。
-//       - 搜索 / tag 过滤**只**驱动右侧"搜索结果页"（SearchResultsPanel）；
-//       - `isSearchMode = searchQuery.trim() !== "" || activeTag !== null` 时，
-//         文档区切到搜索结果页；否则回到现有 note / folder / root 视图。
-//       - 搜索结果只包含 note（不含 folder），按树自然顺序排列。
-//       - 结果项固定两行：标题（大字）+ path（小字）。
-//       - 文件树 folder **真实可开合**：`expandedFolderIds: Set<string>` 由 App
-//         持有单真值，sidebar 只接收 + 回调开合。
-//       - folder 行点击 = 只选中；folder 前开合按钮 = 只展开/折叠。
-//       - `expandedFolderIds` **按 owner 分区持久化**到 localStorage
-//         （`notes-demo:sidebar:{publicKeyHex}`），不写进 `StoredNotesSpace`。
-//       - 加载时：缺失/非法值 → 默认全部展开；已不存在的 folderId 静默丢弃。
-//       - 点击搜索结果后：走 `trySelect`；切换**成功**后再把"祖先路径"
-//         写进 `expandedFolderIds`。
-//       - folder 删除 / 重命名 / 移动时：根据 id 是否还在 tree 里清理无效 id。
+//          第 4-11 章 +
+//          施工单 2026-06-28 001 connect-session-bound-key-integration
+//          硬切换第 1-9 章）：
+//   - 顶层固定两态：`session === null` 时只渲染 `LockScreen`；已认证才渲染工作区。
+//   - **connect session 状态机**（施工单 2026-06-28 001 第 4.1 / 8.3 章）：
+//       - 登录真值 = `connectSessionId`；
+//       - owner 真值 = `connectSession.ownerPublicKeyHex`（**session 绑定 key**）；
+//       - popup transport 断开 ≠ 登录失效；
+//       - popup refresh = unlock runtime 失效，session 仍在；下一次请求走
+//         `connect.resume`，只要求输入密码；
+//       - caller 主动 logout 才退回登录壳。
+//   - 三层状态在 UI 上的对应：
+//       - `popup transport state`（`popupState`）：`idle` / `opening` /
+//         `connected` / `disconnected`，只来自 transport；
+//       - `connect auth state`（`session === null ? "anonymous" : ...`）：
+//         `anonymous` / `resuming` / `authenticated` / `invalid`；
+//       - `workspace state`（`currentEditorState`）：`locked` /
+//         `restoring`（解密中） / `unlocked` / `failed`（decryptFailed）。
+//   - 启动时：读取本地 `connectSession`；若有 → 自动 `resume`；若 resume
+//     命中"session 无效" → 清本地 + 退回登录壳。
+//   - **不再**把 `identity.get` 当登录入口真值；本 demo 只发 `connect.login`
+//     / `connect.resume` / `connect.logout`。
+//   - `cipher.*` 请求**必须**带 `connectSessionId`；**不**读全局 active key。
+//   - 旧章节里针对 `identity.get` / owner 快照 / pendingDrafts / decryptedCache
+//     / selection hydration 等行为全部保留，仅把 owner 真值从 `identity.get`
+//     替换为 `connectSession.ownerPublicKeyHex`。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
@@ -74,10 +41,12 @@ import type { ProtocolErrorCode } from "./lib/protocol";
 import {
   buildCipherDecryptRequest,
   buildCipherEncryptRequest,
-  buildIdentityGetRequest,
+  buildConnectLoginRequest,
+  buildConnectLogoutRequest,
+  buildConnectResumeRequest,
   parseCipherDecryptResult,
   parseCipherEncryptResult,
-  parseIdentityResult
+  parseConnectSessionResult
 } from "./lib/keymaster";
 import {
   NOTE_CONTENT_TYPE,
@@ -89,6 +58,7 @@ import {
 } from "./lib/notes";
 // 注：`emptyDraft` 不再被使用——编辑真值统一收口到 `currentEditorState`。
 import {
+  clearConnectSession,
   createFolder,
   deleteFolder,
   deleteNote,
@@ -98,12 +68,15 @@ import {
   isFolderEmpty,
   isFolderTitleConflict,
   isNoteTitleConflict,
+  loadConnectSession,
   loadOwnerSpace,
   moveFolder,
   moveNote,
   putNote,
   renameFolder,
+  saveConnectSession,
   saveOwnerSpace,
+  type StoredConnectSessionRecord,
   type StoredNotesSpace
 } from "./lib/storage";
 import {
@@ -130,7 +103,7 @@ import { ConnectStatus, type PopupUiState } from "./components/ConnectStatus";
 import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type RootAction, type SidebarContextMenuState, type SidebarSelection } from "./components/NotesSidebar";
 import { NoteEditor } from "./components/NoteEditor";
 import { DocumentToolbar } from "./components/DocumentToolbar";
-import { LockScreen } from "./components/LockScreen";
+import { LockScreen, type LockScreenMode } from "./components/LockScreen";
 import { NameInputDialog } from "./components/NameInputDialog";
 import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
 import { SearchResultsPanel, buildSearchResults } from "./components/SearchResultsPanel";
@@ -146,10 +119,22 @@ const POPUP_HEIGHT = 760;
 /** 窄屏判定阈值：与 styles.css 中的媒体查询保持一致。 */
 const MOBILE_BREAKPOINT = 720;
 
-interface IdentitySnapshot {
-  publicKeyHex: string;
+/**
+ * Connect session 内存态（施工单 2026-06-28 001 第 4.2 / 8.3 章）。
+ * 真值持久化在 `loadConnectSession / saveConnectSession / clearConnectSession`。
+ *
+ * 与 `IdentitySnapshot` 严格区分：
+ *   - `IdentitySnapshot` 是旧的 `identity.get` 一次性身份断言；
+ *   - 本接口是 connect session 真值；
+ *   - 本 demo **不再**使用 `IdentitySnapshot`；它的字段命名已被替代为更明确的
+ *     `ownerPublicKeyHex`（明确表达"该 session 绑定 key 的公钥"）。
+ */
+export interface ConnectSessionSnapshot {
+  sessionId: string;
+  ownerPublicKeyHex: string;
   claims: Record<string, unknown>;
   resolvedAt: number;
+  targetOrigin: string;
 }
 
 /**
@@ -271,8 +256,23 @@ export default function App() {
 
   const [targetOrigin, setTargetOrigin] = useState(DEFAULT_TARGET_ORIGIN);
   const [popupState, setPopupState] = useState<PopupUiState>("idle");
-  const [identity, setIdentity] = useState<IdentitySnapshot | null>(null);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  /**
+   * Connect session 真值（施工单 2026-06-28 001 第 4.2 / 4.4 / 8.3 章）。
+   * - `null` ⇒ 未登录（"anonymous"）；
+   * - 启动时自动从 `loadConnectSession()` 拉取；拉到 → 自动 `resume`；
+   * - `resume` 失败 / 命中 session 无效 → 清本地 session，回 `null`。
+   */
+  const [session, setSession] = useState<ConnectSessionSnapshot | null>(null);
+  /**
+   * 当前正在跑的 connect 流程类型（用于锁屏与页头展示）。
+   * - `null` = 没有在跑 connect 流程；
+   * - `"login"` = 首次登录中；
+   * - `"resume"` = 用本地 sessionId 自动 resume 中；
+   * - `"logout"` = 主动 logout 中。
+   */
+  const [authFlow, setAuthFlow] = useState<"login" | "resume" | "logout" | null>(null);
+  /** `resume` 流程中，session 被服务端判定无效 → 锁屏显示"恢复失败，请重新登录"。 */
+  const [resumeFailed, setResumeFailed] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
   /** 持久化真值：folder + 已落库 note。 */
@@ -414,6 +414,10 @@ export default function App() {
   }
 
   // 切换 targetOrigin 时重建 session。
+  // 设计缘由（施工单 2026-06-28 001 第 6.7 章）：
+  //   - 本地 connectSession 是 origin 绑定的，targetOrigin 改变 ⇒ 旧 session 失效；
+  //   - 重建 popup session 同时清理旧 session（让上层 effect 走"本地 session
+  //     与新 targetOrigin 不匹配"分支，退回登录壳）。
   useEffect(() => {
     if (sessionRef.current) {
       sessionRef.current.closeSession();
@@ -500,10 +504,55 @@ export default function App() {
     return () => window.removeEventListener("resize", evaluate);
   }, [isSidebarOpenOnMobile]);
 
+  /* ============== 启动时：自动读取本地 connect session 并 resume ============== */
+
+  /**
+   * 启动期 connect session 处理（施工单 2026-06-28 001 第 5.2 / 5.5 / 6.7 章）：
+   *
+   * 1. 读取本地 `StoredConnectSessionRecord`；
+   * 2. 缺失 / 非法 → 不动 `session`，让用户走 `login`；
+   * 3. 存在但 `targetOrigin` 与当前不一致 → 视为"跨 origin 复用"，
+   *    清掉本地 session，**不**自动 resume；
+   * 4. 存在且 origin 一致 → 标记 `authFlow = "resume"`，调 `connect.resume`；
+   *    - 成功：写本地 session（refresh 时间戳 / claims）、进入工作区；
+   *    - 命中"session 无效"（吊销 / key 删 / origin mismatch）：清本地 session，
+   *      设 `resumeFailed = true`，让锁屏展示"恢复失败"；
+   *    - 命中"需要解锁"（unlock required）：popup 解锁 UI 接管，本 caller
+   *      走 `session.invalid === false` 分支，照常恢复。
+   *
+   * 边界（施工单 2026-06-28 001 第 5.2 / 6.7 / 9.2 章）：
+   *   - 只跑**一次**（依赖 `[]`，mount 期触发）；
+   *   - 与 `targetOrigin` effect 互不冲突：origin 变化会清 session，下次启动
+   *     自然走 "跨 origin" 分支。
+   *   - 本 demo **不**实现"refresh 后立刻 retry resume N 次"——
+   *     popup 失败由用户主动点"重试 / 重新登录"。
+   */
+  useEffect(() => {
+    const stored = loadConnectSession();
+    if (!stored) return;
+    if (stored.targetOrigin !== (normalizedTargetOrigin || targetOrigin)) {
+      // 跨 origin：清掉旧 session（不允许跨 origin 复用）。
+      clearConnectSession();
+      setResumeFailed(true);
+      return;
+    }
+    void performResume(stored);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* ============== 加载当前 owner 的空间 ============== */
 
+  /**
+   * `session` 变化 → 加载/清空 owner 分区。
+   *
+   * 设计缘由（施工单 2026-06-28 001 第 4.1 / 8.3 章）：
+   *   - owner 真值 = `session.ownerPublicKeyHex`（session 绑定 key），不再是
+   *     旧的 `identity.publicKeyHex`；
+   *   - `session === null` ⇒ 清工作区，回到锁屏；
+   *   - `session !== null` ⇒ 加载对应 owner 的 `StoredNotesSpace`。
+   */
   useEffect(() => {
-    if (!identity) {
+    if (!session) {
       setSpace({ v: 1, folders: {}, notes: {} });
       setSelection({ kind: "root", id: null });
       setCurrentEditorState(null);
@@ -515,7 +564,8 @@ export default function App() {
       setExpandedFolderIds(new Set());
       return;
     }
-    const loaded = loadOwnerSpace(identity.publicKeyHex);
+    const ownerHex = session.ownerPublicKeyHex;
+    const loaded = loadOwnerSpace(ownerHex);
     setSpace(loaded);
     setSelection({ kind: "root", id: null });
     setCurrentEditorState(null);
@@ -526,7 +576,7 @@ export default function App() {
     // 加载当前 owner 的 sidebar 展开状态：
     //   - 无记录 / 非法 → 全部展开（默认行为，匹配"硬切换前"用户感知）；
     //   - 有记录 → 与当前 folders 取交集，静默丢弃已不存在的 id。
-    const persistedExpanded = loadOwnerSidebarState(identity.publicKeyHex);
+    const persistedExpanded = loadOwnerSidebarState(ownerHex);
     if (persistedExpanded === null) {
       // 首次进入：默认所有 folder 展开。
       setExpandedFolderIds(new Set(Object.keys(loaded.folders)));
@@ -534,19 +584,19 @@ export default function App() {
       const valid = persistedExpanded.filter((id) => Boolean(loaded.folders[id]));
       setExpandedFolderIds(new Set(valid));
     }
-  }, [identity?.publicKeyHex]);
+  }, [session?.ownerPublicKeyHex]);
 
   /**
    * `expandedFolderIds` 变化后**仅在已登录**时写回 localStorage。
-   * 设计缘由（施工单 2026-06-27 第 4.7 / 5.5 章）：
+   * 设计缘由（施工单 2026-06-27 第 4.7 / 5.5 章 + 2026-06-28 001 第 8.4 章）：
    *   - 已不存在的 folderId 在加载时已过滤；这里**也**在 `space.folders`
    *     变化时清理（见下方 effect）。
-   *   - 退出工作区时 identity 变 null，effect 不会再触发写回，避免脏写。
+   *   - 退出工作区时 session 变 null，effect 不会再触发写回，避免脏写。
    */
   useEffect(() => {
-    if (!identity) return;
-    saveOwnerSidebarState(identity.publicKeyHex, [...expandedFolderIds]);
-  }, [expandedFolderIds, identity?.publicKeyHex]);
+    if (!session) return;
+    saveOwnerSidebarState(session.ownerPublicKeyHex, [...expandedFolderIds]);
+  }, [expandedFolderIds, session?.ownerPublicKeyHex]);
 
   /**
    * `space.folders` 变化（删除 / 重命名 / 移动）后，清理 `expandedFolderIds`
@@ -584,44 +634,229 @@ export default function App() {
     }
   }
 
-  /* ============== 登录 ============== */
+  /* ============== 登录 / 续登 / 注销 ============== */
 
+  /**
+   * 首次登录入口：调 `connect.login`。
+   *
+   * 设计缘由（施工单 2026-06-28 001 第 5.1 / 8.3 章）：
+   *   - popup 若未解锁 → popup 解锁 UI 接管；解锁后用户选 key → 建立 session；
+   *   - 成功拿到 `connectSessionId + ownerPublicKeyHex + claimsSnapshot` 后：
+   *       * 写本地 `StoredConnectSessionRecord`；
+   *       * 更新 `session` state → 触发 `useEffect` 加载 owner 分区。
+   *   - 失败 → `setLastError`，**不**清本地 session（首次登录没有本地 session）。
+   */
   const handleLogin = useCallback(async () => {
     if (!normalizedTargetOrigin) {
       setLastError(t("app.error.targetOriginInvalid"));
       return;
     }
-    setIsLoggingIn(true);
+    if (authFlow !== null) return; // 已有流程在跑，防御性
+    setAuthFlow("login");
     setLastError(null);
+    setResumeFailed(false);
     try {
-      const session = getSessionClient();
+      const popup = getSessionClient();
       const requestId = makeRequestId();
-      const request = buildIdentityGetRequest({
+      const request = buildConnectLoginRequest({
         origin: currentOrigin,
-        text: t("app.identity.requestText"),
+        text: t("app.connect.login.requestText"),
         ttlSeconds: 300,
         requestId
       });
-      const response = await session.runRequest(request);
+      const response = await popup.runRequest(request);
       if (!response.ok) {
         setLastError(formatProtocolError(response.error.code, response.error.message, t));
-        setIsLoggingIn(false);
         return;
       }
-      const parsed = parseIdentityResult(response.result as never);
-      setIdentity({
-        publicKeyHex: parsed.publicKeyHex,
-        claims: parsed.claims as Record<string, unknown>,
+      const parsed = parseConnectSessionResult(response.result as never);
+      const record: StoredConnectSessionRecord = {
+        v: 1,
+        sessionId: parsed.connectSessionId,
+        ownerPublicKeyHex: parsed.ownerPublicKeyHex,
+        targetOrigin: normalizedTargetOrigin,
+        claimsSnapshot: parsed.claims as Record<string, unknown>,
         resolvedAt: parsed.resolvedAt
+      };
+      saveConnectSession(record);
+      setSession({
+        sessionId: parsed.connectSessionId,
+        ownerPublicKeyHex: parsed.ownerPublicKeyHex,
+        claims: parsed.claims as Record<string, unknown>,
+        resolvedAt: parsed.resolvedAt,
+        targetOrigin: normalizedTargetOrigin
       });
       setPopupState("connected");
     } catch (err) {
       setLastError(formatTransportError(err, t));
     } finally {
-      setIsLoggingIn(false);
+      setAuthFlow(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedTargetOrigin, currentOrigin, t]);
+  }, [normalizedTargetOrigin, currentOrigin, t, authFlow]);
+
+  /**
+   * 用本地 `StoredConnectSessionRecord` 调 `connect.resume`。
+   *
+   * 设计缘由（施工单 2026-06-28 001 第 5.1.2 / 5.2 / 6.2 / 6.5 / 6.6 / 9.2 章 +
+   *          review 反馈：失败码必须严格映射）：
+   *   - 启动期与"用户主动点 resume" 共用同一份逻辑；
+   *   - `popup` 解锁 UI 只在 popup 当前文档 unlocked runtime 失效时出现；
+   *     不重新选 key，不重新走 login；
+   *   - 服务端返回 `error.code` 的处理策略：
+   *
+   *       **视为 session 已永久失效 → 清本地 session + `resumeFailed = true`**：
+   *         - `invalid_origin`：
+   *             origin 与服务端记录的 session.origin 不一致。这是协议层
+   *             **唯一明确表达"这条 session 与当前 caller 不匹配"** 的错误码。
+   *
+   *       **视为临时失败 → 不清本地 session，写 `lastError`，保留"恢复"按钮**：
+   *         - `user_rejected`：用户在 popup 主动点了取消，可能是不小心、可能是
+   *           想稍后再试；本地 session 仍合法，下次直接重试即可。
+   *         - `active_key_unavailable`：绑定 key 当前没 ready，可能是被临时锁定
+   *           或用户未解锁；按施工单 6.6 章"允许等待 key 恢复"语义，**不**清本地
+   *           session，让用户等会儿再点 resume。
+   *         - `internal_error`：协议层定义的"兜底：用户可见但不属于以上分类的失败"。
+   *           显式**不**当作 session 失效——popup runtime 异常、后端瞬时错误、
+   *           实现缺陷等都会落到这里；把这些一律判永久失效会让一次抖动直接赶走用户。
+   *         - `invalid_request`：调用方请求本身有问题（理论上不应发生，但兜底）。
+   *         - `decrypt_failed`：与本次 resume 流程无关（resume 不走 cipher），
+   *           但作为兜底也按临时失败处理。
+   *
+   *       transport 错误（`popup_closed` / `ready_timeout` / `result_timeout` /
+   *       `popup_blocked`）：由 catch 统一收口——按临时失败处理，不清本地 session。
+   *
+   *   - 总原则（review 反馈）：**保守收敛**——宁可让用户多按一次 resume，也**不要**
+   *     因为一次临时失败就把人家赶回重新登录；只有协议层明确表达的"session 与
+   *     当前 caller 不匹配"才走清 session 路径。
+   *
+   * 注意：
+   *   - 不在成功路径上 patch `resolvedAt`（resume 不应变更 owner / claims，
+   *     只刷新 `resolvedAt` 让 `lastLoginAt` 跟上）。
+   */
+  const performResume = useCallback(async (stored: StoredConnectSessionRecord) => {
+    if (!normalizedTargetOrigin) {
+      // 防御性：targetOrigin 已被改，但启动 effect 用的是旧的 → 直接清掉。
+      clearConnectSession();
+      setResumeFailed(true);
+      return;
+    }
+    setAuthFlow("resume");
+    setLastError(null);
+    try {
+      const popup = getSessionClient();
+      const requestId = makeRequestId();
+      const request = buildConnectResumeRequest({
+        connectSessionId: stored.sessionId,
+        requestId
+      });
+      const response = await popup.runRequest(request);
+      if (!response.ok) {
+        const code = response.error.code;
+        if (code === "invalid_origin") {
+          // 协议层**唯一明确**表达"session 与当前 caller 不匹配"的错误码：
+          //   origin 与服务端记录的 session.origin 不一致。
+          // 此时服务端已判定 session 与当前 caller 不匹配 → 清本地 + 标记恢复失败。
+          clearConnectSession();
+          setResumeFailed(true);
+          return;
+        }
+        // 其它协议错误一律按临时失败处理：
+        //   - 不清本地 session；
+        //   - 写 lastError；
+        //   - 锁屏层 `loadConnectSession()` 仍能拿到记录 → 用户可继续点 "恢复 session" 重试。
+        setLastError(formatProtocolError(code, response.error.message, t));
+        return;
+      }
+      const parsed = parseConnectSessionResult(response.result as never);
+      // 服务端可能刷新了 ownerPublicKeyHex / claims / resolvedAt——以服务端为准。
+      const next: StoredConnectSessionRecord = {
+        v: 1,
+        sessionId: parsed.connectSessionId,
+        ownerPublicKeyHex: parsed.ownerPublicKeyHex,
+        targetOrigin: stored.targetOrigin,
+        claimsSnapshot: parsed.claims as Record<string, unknown>,
+        resolvedAt: parsed.resolvedAt
+      };
+      saveConnectSession(next);
+      setSession({
+        sessionId: parsed.connectSessionId,
+        ownerPublicKeyHex: parsed.ownerPublicKeyHex,
+        claims: parsed.claims as Record<string, unknown>,
+        resolvedAt: parsed.resolvedAt,
+        targetOrigin: stored.targetOrigin
+      });
+      setPopupState("connected");
+      setResumeFailed(false);
+    } catch (err) {
+      setLastError(formatTransportError(err, t));
+    } finally {
+      setAuthFlow(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedTargetOrigin, t]);
+
+  /**
+   * 用户主动点"恢复 session"按钮的入口。
+   * 锁屏层 + 已登录页头都会触发；行为与启动期 resume 完全一致。
+   */
+  const handleResume = useCallback(async () => {
+    const stored = loadConnectSession();
+    if (!stored) {
+      setResumeFailed(true);
+      return;
+    }
+    if (stored.targetOrigin !== (normalizedTargetOrigin || targetOrigin)) {
+      clearConnectSession();
+      setResumeFailed(true);
+      return;
+    }
+    if (authFlow !== null) return;
+    await performResume(stored);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalizedTargetOrigin, targetOrigin, authFlow, performResume]);
+
+  /**
+   * 用户主动点"退出登录"按钮：调 `connect.logout`，清本地 session，回登录壳。
+   *
+   * 设计缘由（施工单 2026-06-28 001 第 4.4 / 5.1.3 / 6.6 章）：
+   *   - 成功：清本地 session + 清工作区内存态 → 退回登录壳；
+   *   - 失败（transport 抖动等）：按 6.6 节"无法确认服务端已吊销"分支，
+   *     **保守**清本地 session + 提示用户；用户下次启动可走 `resume` 再收敛；
+   *   - 不做多步补偿 / 不维护"待吊销 logout 队列"（6.6.1 章）。
+   */
+  const handleLogout = useCallback(async () => {
+    if (!session) return;
+    if (authFlow !== null) return;
+    setAuthFlow("logout");
+    setLastError(null);
+    try {
+      const popup = getSessionClient();
+      const requestId = makeRequestId();
+      const request = buildConnectLogoutRequest({
+        connectSessionId: session.sessionId,
+        requestId
+      });
+      const response = await popup.runRequest(request);
+      if (!response.ok) {
+        // 服务端吊销失败：仍走"保守清本地"路径，但 lastError 提示。
+        setLastError(formatProtocolError(response.error.code, response.error.message, t));
+      }
+    } catch (err) {
+      setLastError(formatTransportError(err, t));
+    } finally {
+      // 不论服务端是否成功吊销，本地一律清掉（6.6.1）。
+      clearConnectSession();
+      setSession(null);
+      setAuthFlow(null);
+      setResumeFailed(false);
+      // closeSession 让 transport 也复位——下次 login / resume 走新会话。
+      sessionRef.current?.closeSession();
+      sessionRef.current = null;
+      setPopupState("idle");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, authFlow, t]);
 
   /* ============== 切换拦截 ============== */
 
@@ -798,6 +1033,7 @@ export default function App() {
    *     要消除的旧行为。
    */
   async function openPersistedNote(record: StoredNoteRecord) {
+    if (!session) return;
     const myOp = ++openOperationRef.current;
     const myNoteId = record.id;
     const myRequestId = makeRequestId();
@@ -828,11 +1064,11 @@ export default function App() {
       decryptFailed: false
     });
 
-    const session = getSessionClient();
+    const popup = getSessionClient();
     // 旧 pending decrypt 仍存在 → 立即 fire-and-forget cancel。
     // cancel 没有 ack，旧请求仍可能晚回来；本调用靠代际隔离丢弃它们。
     if (previous && previous.requestId !== myRequestId) {
-      session.cancelRequest(previous.requestId);
+      popup.cancelRequest(previous.requestId);
     }
 
     const request = buildCipherDecryptRequest({
@@ -840,11 +1076,13 @@ export default function App() {
       text: `${record.title}`,
       nonceBase64: record.cipher.nonceBase64,
       cipherbytesBase64: record.cipher.cipherbytesBase64,
-      requestId: myRequestId
+      requestId: myRequestId,
+      // 施工单 2026-06-28 001 第 5.2.2 章：cipher.* 必须带 connectSessionId。
+      connectSessionId: session.sessionId
     });
 
     try {
-      const response = await session.runRequest(request);
+      const response = await popup.runRequest(request);
       // 拿到结果后再校验代际：用户可能已切到别的 note / folder / root / 删掉。
       if (pendingDecryptRef.current?.requestId !== myRequestId) return;
       if (pendingDecryptRef.current?.generation !== myOp) return;
@@ -974,7 +1212,7 @@ export default function App() {
    *     避免静默丢弃当前编辑。
    */
   function handleCreateNote(parentIdOverride?: string | null) {
-    if (!identity) return;
+    if (!session) return;
     const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
     // 已 dirty 且有未保存修改：弹"保存并切换"遮罩，action = create-note。
     if (currentEditorState && !currentEditorState.decryptFailed && isDirty(currentEditorState)) {
@@ -1005,7 +1243,7 @@ export default function App() {
    *     decrypt，但 cancel 是 no-op，不影响功能。
    */
   function doCreateNote(parentId: string | null) {
-    if (!identity) return;
+    if (!session) return;
     // 离开当前编辑态（即便 currentEditorState 实际为 `loading` 或 null，
     // 都要清 pending 引用 + 自增代际 + 对旧 request 发 cancel）。
     cancelCurrentPendingDecrypt();
@@ -1059,7 +1297,7 @@ export default function App() {
    * 新建文件夹：先开页面内命名弹层，让用户输入名字再真正创建。
    */
   function handleCreateFolder(parentIdOverride?: string | null) {
-    if (!identity) return;
+    if (!session) return;
     const parentId = parentIdOverride === undefined ? resolveCreateParent() : parentIdOverride;
     setNameDialog({
       mode: { kind: "create-folder", parentId },
@@ -1308,7 +1546,7 @@ export default function App() {
 
   function commitSpace(next: StoredNotesSpace) {
     setSpace(next);
-    if (identity) saveOwnerSpace(identity.publicKeyHex, next);
+    if (session) saveOwnerSpace(session.ownerPublicKeyHex, next);
   }
 
   /* ============== 保存 ============== */
@@ -1317,7 +1555,7 @@ export default function App() {
    * 主动点击 save 按钮的入口。
    */
   async function handleSave() {
-    if (!identity || !currentEditorState) return;
+    if (!session || !currentEditorState) return;
     if (saveOverlay !== null) return; // 已经在阻塞态，不重复开。
     const state = currentEditorState;
     if (state.decryptFailed) {
@@ -1357,7 +1595,7 @@ export default function App() {
    *   `action` 保留，保存成功后由 `completeSaveFlow` 派发。
    */
   async function handleSaveAndSwitch() {
-    if (!identity || !currentEditorState || !saveOverlay) return;
+    if (!session || !currentEditorState || !saveOverlay) return;
     if (saveOverlay.mode !== "save-and-switch") return;
     const state = currentEditorState;
     if (state.decryptFailed) return; // 防御性：decryptFailed 走不到这里
@@ -1399,7 +1637,7 @@ export default function App() {
    *   - `completeSaveFlow(action)` **仅在**加密成功**且**未被用户取消时派发。
    */
   async function performSave() {
-    if (!identity || !currentEditorState) return;
+    if (!session || !currentEditorState) return;
     const state = currentEditorState;
     const action = saveOverlay?.action ?? { kind: "none" };
     const draftAtSave = state;
@@ -1407,14 +1645,16 @@ export default function App() {
     saveCancelledRef.current = false;
     let didSucceed = false;
     try {
-      const session = getSessionClient();
+      const popup = getSessionClient();
       const request = buildCipherEncryptRequest({
         text: t("app.encrypt.requestText"),
         contentType: NOTE_CONTENT_TYPE,
         markdown: draftAtSave.markdown,
-        requestId: makeRequestId()
+        requestId: makeRequestId(),
+        // 施工单 2026-06-28 001 第 5.2.1 章：cipher.encrypt 必须带 connectSessionId。
+        connectSessionId: session.sessionId
       });
-      const response = await session.runRequest(request);
+      const response = await popup.runRequest(request);
       // 收到结果后再检查一次：用户在等待期间点了"取消"。
       if (saveCancelledRef.current) {
         // 用户已主动取消：忽略 popup 的结果，**不**写盘。
@@ -1446,7 +1686,7 @@ export default function App() {
       const next = putNote(space, record);
       // (1) 写持久层 + space；
       setSpace(next);
-      saveOwnerSpace(identity.publicKeyHex, next);
+      saveOwnerSpace(session.ownerPublicKeyHex, next);
       // (2) patch currentEditorState：
       //     - kind: "new" → "persisted"；
       //     - baseline = 当前值；
@@ -1873,14 +2113,14 @@ export default function App() {
     return null;
   }, [currentEditorState, t]);
 
-  const ownerLabel = identity ? truncate(identity.publicKeyHex, 8) : "";
+  const ownerLabel = session ? truncate(session.ownerPublicKeyHex, 8) : "";
 
   /**
    * 给 NoteEditor 的 `editable` 标志。
    * 边界：未登录 / decryptFailed / loading / 保存阻塞态 → 不可编辑。
    */
   const editorEditable =
-    !!identity &&
+    !!session &&
     !!(
       currentEditorState &&
       !currentEditorState.decryptFailed &&
@@ -1936,7 +2176,11 @@ export default function App() {
     sessionRef.current?.closeSession();
     sessionRef.current = null;
     setPopupState("idle");
-    setIdentity(null);
+    // 施工单 2026-06-28 001 第 4.4 / 8.3 章：退回登录壳清本地 session + 工作区。
+    setSession(null);
+    clearConnectSession();
+    setAuthFlow(null);
+    setResumeFailed(false);
     setSpace({ v: 1, folders: {}, notes: {} });
     setSelection({ kind: "root", id: null });
     setCurrentEditorState(null);
@@ -1969,8 +2213,8 @@ export default function App() {
   /* ============== 删除当前 owner 本地数据 ============== */
 
   function handleDeleteCurrentOwnerData() {
-    if (!identity || isLoggingIn) return;
-    const ownerHex = identity.publicKeyHex;
+    if (!session || authFlow !== null) return;
+    const ownerHex = session.ownerPublicKeyHex;
     setConfirmDialog({
       title: t("app.deleteDataConfirm.title"),
       message: t("app.deleteDataConfirm.message"),
@@ -1991,17 +2235,67 @@ export default function App() {
 
   /* ============== 顶层渲染 ============== */
 
+  /**
+   * 锁屏层 mode 推导（施工单 2026-06-28 001 第 4.3 章）：
+   *   - `login` ：无本地 session，等用户输入 target origin 后点登录；
+   *   - `resume`：有本地 session，自动 / 手动 resume 中（不允许重复点击）；
+   *   - `resumeFailed`：resume 失败 / 跨 origin / 本地记录损坏；展示恢复失败。
+   *
+   * 锁屏层不再区分"需要登录 / 正在恢复 / 恢复失败"为多个组件，全部由
+   * `LockScreen` 内部按 `mode` 自行切。
+   */
+  const lockScreenMode: LockScreenMode = (() => {
+    if (authFlow === "resume") return "resume";
+    if (resumeFailed) return "resumeFailed";
+    if (authFlow === "login") return "login";
+    return "login";
+  })();
+
   // 未登录态：只渲染 LockScreen；不显示 notes 工作区任何部分。
-  if (!identity) {
+  //
+  // 设计缘由（施工单 2026-06-28 001 第 4.3 / 5.2 章 +
+  //          review 反馈：临时失败后必须仍可重新 resume）：
+  //   - 锁屏层永远把"本地已记住的 session"（若存在）下发给 `LockScreen`；
+  //     锁屏根据 `mode` 决定是否显示"恢复 session"按钮：
+  //       * `resume` → 始终显示（用户主动点的 resume 进行中）；
+  //       * `resumeFailed` → **不**显示（服务端已判定无效；本地 session 已清，
+  //         `loadConnectSession` 也会返回 null）；
+  //       * `login` + 有 stored session → 显示，并允许用户重试 resume（关键）：
+  //           - 这正是 review 反馈的"临时失败后必须仍可重新 resume"；
+  //           - 临时失败包括 `user_rejected`、transport 异常、`internal_error` 等
+  //             **非 session 失效** 类失败；
+  //           - 这类失败下 `clearConnectSession()` 没被调，`loadConnectSession()`
+  //             仍能拿到记录 → `LockScreen` 即可继续渲染"恢复 session"按钮。
+  //   - 不再"只在 `resumeFailed` 或正在 `resume` 时才把 `storedSession` 传给
+  //     LockScreen"——那会把临时失败场景下"用户点 Resume 但被弹回登录壳"的恢复路径打断。
+  if (!session) {
+    const stored = loadConnectSession();
     return (
       <LockScreen
+        mode={lockScreenMode}
         targetInput={targetOrigin}
         defaultTargetOrigin={DEFAULT_TARGET_ORIGIN}
         lastError={lastError}
-        isLoggingIn={isLoggingIn}
+        isLoggingIn={authFlow !== null}
+        storedSession={
+          stored
+            ? {
+                sessionId: stored.sessionId,
+                ownerPublicKeyHex: stored.ownerPublicKeyHex,
+                targetOrigin: stored.targetOrigin,
+                resolvedAt: stored.resolvedAt
+              }
+            : null
+        }
         onTargetInputChange={setTargetOrigin}
         onUseDefault={() => setTargetOrigin(DEFAULT_TARGET_ORIGIN)}
         onLogin={() => void handleLogin()}
+        onResume={() => void handleResume()}
+        onForget={() => {
+          clearConnectSession();
+          setResumeFailed(false);
+          setLastError(null);
+        }}
       />
     );
   }
@@ -2056,11 +2350,14 @@ export default function App() {
           state={popupState}
           currentOrigin={currentOrigin}
           targetOrigin={normalizedTargetOrigin || targetOrigin}
-          publicKeyHex={identity?.publicKeyHex ?? null}
-          lastLoginAt={identity?.resolvedAt ?? null}
-          isLoggingIn={isLoggingIn}
+          publicKeyHex={session?.ownerPublicKeyHex ?? null}
+          sessionId={session?.sessionId ?? null}
+          lastLoginAt={session?.resolvedAt ?? null}
+          isLoggingIn={authFlow !== null}
           onLogin={() => void handleLogin()}
+          onResume={() => void handleResume()}
           onForget={handleSwitchIdentity}
+          onLogout={() => void handleLogout()}
           onDeleteCurrentData={handleDeleteCurrentOwnerData}
         />
       </header>
@@ -2113,7 +2410,7 @@ export default function App() {
           dropHover={dropHover}
           moveState={moveState}
           ownerLabel={ownerLabel}
-          disabled={isLoggingIn}
+          disabled={authFlow !== null}
           expandedFolderIds={expandedFolderIds}
           onToggleFolderExpand={handleToggleFolderExpand}
           onSelect={trySelect}
@@ -2158,13 +2455,13 @@ export default function App() {
                 isSaving={isBlockingSave}
                 titleError={titleError}
                 canEdit={
-                  !!identity &&
-                  !isLoggingIn &&
+                  !!session &&
+                  authFlow === null &&
                   !currentEditorState.decryptFailed &&
                   !currentEditorState.loading &&
                   !isBlockingSave
                 }
-                canDelete={!!identity && !isLoggingIn && !isBlockingSave}
+                canDelete={!!session && authFlow === null && !isBlockingSave}
                 onChangeTags={(tags) =>
                   setCurrentEditorState((prev) => (prev ? { ...prev, tags } : prev))
                 }

@@ -2,13 +2,20 @@
 // 登录壳：未登录态下唯一渲染的页面。
 //
 // 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 3-7 章 +
-//          施工单 2026-06-27 005-i18n-header-language-switch 8.8 章）：
-//   - LockScreen 只在 `identity === null` 时显示。
-//   - 职责：产品介绍 + 协议能力说明 + target origin 输入 + 默认地址快捷入口 + 登录按钮 + 最近错误。
+//          施工单 2026-06-27 005-i18n-header-language-switch 8.8 章 +
+//          施工单 2026-06-28 001 connect-session-bound-key-integration
+//          硬切换第 4.3 / 8.5 章）：
+//   - LockScreen 只在 `session === null` 时显示。
+//   - 职责：产品介绍 + 协议能力说明 + target origin 输入 + 默认地址快捷入口 +
+//     登录按钮 + 最近错误 + **resume 状态 + 恢复失败提示**。
 //   - 明确不承载 notes 数据、不显示文件树预览、不显示最近 owner 摘要。
 //   - 用户输入可以是完整 URL 或 origin 字符串；最终系统只取 `URL().origin`。
 //   - 非法 URL / origin 直接阻断，不自动修正、不 fallback 默认值。
 //   - 所有用户可见文案走 i18n 字典；不直接写中文/英文/日文。
+//   - **新**：mode 区分三种语义：
+//       - `"login"`        —— 没有本地 session，显示真正的登录入口；
+//       - `"resume"`       —— 有本地 session、正在 resume（popup 可能要求解锁）；
+//       - `"resumeFailed"` —— resume 失败 / 跨 origin / 记录损坏，提示重新登录。
 
 import { useEffect, useMemo, useState } from "react";
 import { normalizeOrigin } from "../lib/connectClient";
@@ -16,21 +23,56 @@ import { useI18n } from "../i18n/useI18n";
 
 export const DEFAULT_TARGET_ORIGIN = "https://keymaster.cc";
 
+/**
+ * 锁屏层对外状态机（施工单 2026-06-28 001 第 4.3 / 8.5 章）。
+ * - `login`：未登录态，等用户输入 + 点登录；
+ * - `resume`：有本地 session，正在尝试 resume；不允许重复点击；
+ * - `resumeFailed`：resume 失败，需要用户主动确认再 login。
+ */
+export type LockScreenMode = "login" | "resume" | "resumeFailed";
+
+/**
+ * 锁屏层用于展示"已记住 session"的最小视图（不再显示敏感材料）。
+ * 与 `StoredConnectSessionRecord` 解耦——锁屏层只关心 id / owner / origin / 时间戳，
+ * **不**读 claims。
+ */
+export interface LockScreenStoredSession {
+  sessionId: string;
+  ownerPublicKeyHex: string;
+  targetOrigin: string;
+  resolvedAt: number;
+}
+
 export interface LockScreenProps {
+  /** 锁屏层当前模式（由 App 推导）。 */
+  mode: LockScreenMode;
   /** 当前输入框的目标 origin / url（用户原始输入字符串）。 */
   targetInput: string;
   /** 默认值，用于"使用默认地址"快捷入口。 */
   defaultTargetOrigin: string;
   /** 最近一次协议 / transport 错误；null 表示没有。 */
   lastError: string | null;
-  /** 是否正在拉起 popup。 */
+  /** 是否正在拉起 popup（含 login / resume / logout 三种）。 */
   isLoggingIn: boolean;
+  /**
+   * 本地已记住的 connect session 摘要。
+   * - `null` ⇒ 没有本地 session；
+   * - 有值 ⇒ 锁屏层可以显示"已记住 session"信息 + 提供 resume 入口。
+   */
+  storedSession: LockScreenStoredSession | null;
   /** 用户编辑输入框 → App 同步回锁屏。 */
   onTargetInputChange: (value: string) => void;
   /** 点击"使用默认地址"。 */
   onUseDefault: () => void;
-  /** 点击登录按钮。 */
+  /** 点击登录按钮（首次登录入口）。 */
   onLogin: () => void;
+  /** 点击"恢复 session"按钮。 */
+  onResume: () => void;
+  /**
+   * 点击"忘掉当前 session"按钮：清本地 session，回真正登录入口。
+   * 仅在有 storedSession 时显示。
+   */
+  onForget: () => void;
 }
 
 /**
@@ -41,6 +83,8 @@ export interface LockScreenProps {
  * - 不展示文件树预览、不展示最近 owner；
  * - 非法 URL → 阻断登录 + 明确提示；
  * - 不做自动猜测、自动修正、自动回退默认 origin。
+ * - mode === "resume" 时按钮 disabled，避免重复触发。
+ * - mode === "resumeFailed" 时显示恢复失败提示，并保留登录入口。
  */
 export function LockScreen(props: LockScreenProps) {
   const { t } = useI18n();
@@ -70,6 +114,19 @@ export function LockScreen(props: LockScreenProps) {
     props.onUseDefault();
   };
 
+  const handleResume = () => {
+    if (props.isLoggingIn) return;
+    props.onResume();
+  };
+
+  const handleForget = () => {
+    if (props.isLoggingIn) return;
+    props.onForget();
+  };
+
+  const showResumeEntry =
+    props.storedSession !== null && props.mode !== "resumeFailed" && normalized === props.storedSession.targetOrigin;
+
   return (
     <div className="lock-screen">
       <div className="lock-screen__panel">
@@ -83,19 +140,41 @@ export function LockScreen(props: LockScreenProps) {
           <h2 className="lock-screen__section-title">{t("lock.capabilities.title")}</h2>
           <ul>
             <li>
-              <code>identity.get</code>
-              <span>{t("lock.capabilities.identity.get.desc")}</span>
+              <code>{t("lock.capabilities.connect.login")}</code>
+              <span>{t("lock.capabilities.connect.login.desc")}</span>
             </li>
             <li>
-              <code>cipher.encrypt</code>
+              <code>{t("lock.capabilities.connect.resume")}</code>
+              <span>{t("lock.capabilities.connect.resume.desc")}</span>
+            </li>
+            <li>
+              <code>{t("lock.capabilities.connect.logout")}</code>
+              <span>{t("lock.capabilities.connect.logout.desc")}</span>
+            </li>
+            <li>
+              <code>{t("lock.capabilities.cipher.encrypt")}</code>
               <span>{t("lock.capabilities.cipher.encrypt.desc")}</span>
             </li>
             <li>
-              <code>cipher.decrypt</code>
+              <code>{t("lock.capabilities.cipher.decrypt")}</code>
               <span>{t("lock.capabilities.cipher.decrypt.desc")}</span>
             </li>
           </ul>
         </section>
+
+        {props.mode === "resume" ? (
+          <section className="lock-screen__status lock-screen__status--resuming" role="status" aria-live="polite">
+            <h3>{t("lock.status.resuming")}</h3>
+            <p>{t("lock.status.resuming.description")}</p>
+          </section>
+        ) : null}
+
+        {props.mode === "resumeFailed" ? (
+          <section className="lock-screen__status lock-screen__status--failed" role="alert">
+            <h3>{t("lock.status.resumeFailed")}</h3>
+            <p>{t("lock.status.resumeFailed.description")}</p>
+          </section>
+        ) : null}
 
         <form className="lock-screen__form" onSubmit={handleSubmit}>
           <label className="lock-screen__field">
@@ -140,10 +219,50 @@ export function LockScreen(props: LockScreenProps) {
               disabled={!canSubmit}
               title={!canSubmit && trimmed.length === 0 ? t("lock.action.login.submitTitle") : undefined}
             >
-              {props.isLoggingIn ? t("lock.action.login.opening") : t("lock.action.login")}
+              {props.isLoggingIn && props.mode !== "resume"
+                ? t("lock.action.login.opening")
+                : t("lock.action.login")}
             </button>
           </div>
         </form>
+
+        {showResumeEntry && props.storedSession ? (
+          <section className="lock-screen__resume" aria-label={t("lock.action.resume")}>
+            <div className="lock-screen__resume-meta">
+              <div>
+                <strong>{t("connect.row.sessionId")}:</strong>{" "}
+                <code title={props.storedSession.sessionId}>{shortenId(props.storedSession.sessionId, 12)}</code>
+              </div>
+              <div>
+                <strong>{t("connect.row.publicKey")}:</strong>{" "}
+                <code title={props.storedSession.ownerPublicKeyHex}>
+                  {shortenId(props.storedSession.ownerPublicKeyHex, 8)}
+                </code>
+              </div>
+            </div>
+            <div className="lock-screen__actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleResume}
+                disabled={props.isLoggingIn}
+              >
+                {props.isLoggingIn && props.mode === "resume"
+                  ? t("lock.action.resume.opening")
+                  : t("lock.action.resume")}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleForget}
+                disabled={props.isLoggingIn}
+                title={t("lock.action.forget.title")}
+              >
+                {t("lock.action.forget")}
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         {props.lastError ? (
           <div className="lock-screen__error" role="alert">
@@ -174,4 +293,9 @@ function tryNormalizeOrigin(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function shortenId(value: string, head: number): string {
+  if (value.length <= head + 4) return value;
+  return `${value.slice(0, head)}…${value.slice(-4)}`;
 }
