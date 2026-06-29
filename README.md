@@ -1,13 +1,14 @@
-# Keymaster Connect Notes Demo
+# JustNote
 
-基于 Keymaster Connect V1 协议的加密笔记 demo。
+JustNote 是一个无门槛（Thresholdless）、安全、存储在当前浏览器的简单 note。
 
 ## 项目定位
 
-这是一个**外部调用方 demo**：单页前端，真值由 Keymaster 提供。它**不是**产品原型，
-**不是**协作工具，**不是**离线缓存容器，**不是**某个 Keymaster 厂商的专属产品。
+JustNote 是一个单页前端笔记应用：正文按 session 绑定 key 加密，数据只保存在当前浏览器。
+它**不是**协作工具，**不是**跨设备同步产品，**不是**离线缓存容器，**不是**某个 Keymaster
+厂商的专属产品。
 
-我们只做一件事：证明一个最小外部站点能
+这个项目只做一件事：把"打开就能写、默认安全、边界清楚"的 note 产品做扎实。
 
 - 用 `connect.login` 拉起 Keymaster popup 完成首次登录并选定 key；
 - 用 `connect.resume` 在页面刷新、popup 关闭重开、transport 抖动时恢复已授权的 session；
@@ -17,6 +18,9 @@
 - 把密文 + 元数据落到本地 KV（按 session 绑定 owner 分区）；
 - 在不缓存明文的前提下，仍能保持"打开 → 编辑 → 保存"的闭环；
 - 让用户选择**任意实现相同协议**的登录器（不再写死 Keymaster）。
+
+最重要的边界只有一条：数据存储在**当前浏览器**。即便使用相同的 key，更换浏览器后，
+也找不到当前浏览器里保存的笔记数据。
 
 ## 登录真值：connect session（硬切换后的明确产品定义）
 
@@ -180,7 +184,7 @@ workspace         ← 二栏 grid：sidebar | document-panel
 
 已登录态页头提供**唯一**删除入口：
 
-- 删除对象 = `localStorage["notes-demo:owner:{publicKeyHex}"]`，**不**递归遍历
+- 删除对象 = `localStorage["justnote:owner:{publicKeyHex}"]`，**不**递归遍历
   note / folder；底层 key 本来就不存在时视为成功；
 - 删除成功**后**才执行内存态清空并退回 `LockScreen`，顺序硬约束；
 - 删除失败时**不**退回 `LockScreen`、**不**清空 `identity`、**不**清空工作区，
@@ -211,7 +215,7 @@ npm run preview      # 预览生产构建
 
 ## 依赖的 Keymaster 能力
 
-本 demo 调用以下协议方法：
+JustNote 运行时调用以下协议方法：
 
 | 方法 | 用途 |
 |---|---|
@@ -234,7 +238,7 @@ LockScreen 上允许用户输入任意 `target origin / url`：
 - 非法 URL / 无法归一 → 直接阻断登录，提示 `Target origin 非法。`，
   不做自动修正、自动 fallback、自动重试。
 
-本 demo 不维护：
+JustNote 不维护：
 
 - provider 列表 / 收藏夹；
 - 最近使用记录；
@@ -245,7 +249,7 @@ LockScreen 上允许用户输入任意 `target origin / url`：
 
 刷新页面后：
 
-- notes demo 读取本地 `connectSessionRecord`；
+- JustNote 读取本地 `connectSessionRecord`；
 - 若**有**本地 sessionId 且 `targetOrigin` 与当前一致 → 自动 `connect.resume`：
   - session 仍在 → 直接进入工作区；
   - popup 当前未解锁 → 只要求输入密码；
@@ -265,7 +269,7 @@ transport 断开后：
 - **不**立即清 owner 分区；
 - 下次需要协议请求时优先重建 popup 并 `resume`。
 
-这是硬切换后的明确产品定义，不是缺陷。本 demo **不**支持：
+这是硬切换后的明确产品定义，不是缺陷。JustNote **不**支持：
 
 - 把 `identity.get` 当长期登录真值；
 - 把 popup transport 窗口是否还活着当成 auth session 是否还活着；
@@ -277,7 +281,7 @@ transport 断开后：
 notes 数据空间只按 session 绑定的 `ownerPublicKeyHex` 分区：
 
 ```txt
-notes-demo:owner:{publicKeyHex}
+justnote:owner:{publicKeyHex}
 ```
 
 `target origin` **不**参与分区：
@@ -338,7 +342,7 @@ interface StoredNotesSpace {
 }
 ```
 
-容器按 `ownerPublicKeyHex` 分区（`localStorage` key = `notes-demo:owner:{publicKeyHex}`）；
+容器按 `ownerPublicKeyHex` 分区（`localStorage` key = `justnote:owner:{publicKeyHex}`）；
 record 自身不重复携带 owner。
 
 ### 根目录
@@ -398,7 +402,7 @@ record 自身不重复携带 owner。
 
 - popup session **并行**接受多条 request；transport 不再做"同一时刻只允许
   一条在途"的 single-flight 限制；
-- 内部执行串行由 Keymaster 自行负责，demo 前端**不**再做 note 打开排队；
+- 内部执行串行由 Keymaster 自行负责，前端**不**再做 note 打开排队；
 - 用户从未打开的 note A 切到未打开的 note B 时：
   - 立即对 A 发顶层 `cancel(A.requestId)`（fire-and-forget，不等 ack）；
   - 立即为 B 发新的 `cipher.decrypt` 请求；
@@ -444,7 +448,7 @@ record 自身不重复携带 owner。
 7. 左侧点击 **+ 文件夹** → 根目录下出现新文件夹；
 8. 在文件夹上右键 → 选 `新建 note`；
 9. 编辑区顶部输入文件名；正文输入段落与列表；
-10. 右侧面板把 tags 字段填入 `demo, keymaster`；
+10. 右侧面板把 tags 字段填入 `justnote, browser`；
 11. 点击 **加密保存** → 触发 `cipher.encrypt`（带 `connectSessionId`）；
 12. **刷新页面** → 锁屏层短暂显示"正在恢复 session"，然后自动进入工作区；
 13. 重新进入工作区后，左侧树仍显示原 owner 的 folder + note 树；
@@ -462,7 +466,7 @@ record 自身不重复携带 owner。
 22. 已登录态点击 **删除当前本地数据** → 弹二次确认框（明确说明只删本地数据、
     不删 Keymaster 身份）→ 确认 → 退回 `LockScreen`；再次登录同一 owner 应看到空树，
     原数据**不**再恢复；
-23. 自定义 origin：在 LockScreen 输入 `https://demo.example.com`（假设对方实现
+23. 自定义 origin：在 LockScreen 输入 `https://notes.example.com`（假设对方实现
     相同协议）→ 登录 → 应能进入 notes 工作区，与默认 origin 行为一致；
 24. note 打开链路验收：连续快速点击未解密 note A → B → C，前端应**立即**对
     A、B 各发一条 `cancel`（在浏览器 devtools / `console.debug` 里能看到
@@ -528,7 +532,7 @@ src/
 
 ## 不允许的事
 
-施工单硬定义了一组核心边界，本 demo 严格遵守：
+施工单硬定义了一组核心边界，JustNote 严格遵守：
 
 - 不自研 Notion 编辑器（用 BlockNote）；
 - 不做 mock / fallback；
@@ -568,7 +572,7 @@ src/
 
 ### connect session 硬切换的额外边界（2026-06-28 001）
 
-- 不继续把 `identity.get` 当 notes demo 的长期登录真值。
+- 不继续把 `identity.get` 当 JustNote 的长期登录真值。
 - 不继续把 popup transport 窗口是否还活着当成 auth session 是否还活着。
 - 不在本地持久化用户密码或 popup 解锁运行时材料。
 - 不让 `cipher.*` 不带 `connectSessionId`（必须按 session 绑定 key 执行）。

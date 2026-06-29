@@ -4,7 +4,7 @@
 //
 // 设计缘由（施工单第 4 / 9 章 + 2026-06-26 save-switch-current-editor-state +
 //          2026-06-28 001 connect-session-bound-key-integration 第 4.2 / 8.4 章）：
-//   - 容器按 ownerPublicKeyHex 分区；存储 key `notes-demo:owner:{publicKeyHex}`。
+//   - 容器按 ownerPublicKeyHex 分区；存储 key `justnote:owner:{publicKeyHex}`。
 //   - 容器形态：`{ folders: Record<id, StoredFolderRecord>, notes: Record<id, StoredNoteRecord> }`。
 //   - owner 信息**不**写进 record 本身；外层 key 已经隔离。
 //   - 这一层**不**持有 markdown 明文缓存；只持有密文 + 明文元数据。
@@ -13,7 +13,7 @@
 //     未保存 note 只活在 App 的内存态 `currentEditorState`（`kind: "new"`）里；
 //     第一次成功加密保存后才通过 `putNote` 进入 space / localStorage。
 //   - 本地 connect session 记录收口到本文件：
-//       * storage key = `notes-demo:connect-session`（**全局单条**，**不**按 owner 分区）；
+//       * storage key = `justnote:connect-session`（**全局单条**，**不**按 owner 分区）；
 //       * 持久化内容 = `{ sessionId, ownerPublicKeyHex, targetOrigin, claimsSnapshot, resolvedAt }`；
 //       * **不**持久化 popup transport 句柄；
 //       * **不**持久化 popup unlock runtime / 用户密码。
@@ -21,8 +21,8 @@
 import type { StoredFolderRecord, StoredNoteRecord } from "./notes";
 import { isStoredFolderRecord, isStoredNoteRecord } from "./notes";
 
-const STORAGE_KEY_PREFIX = "notes-demo:owner:";
-const CONNECT_SESSION_STORAGE_KEY = "notes-demo:connect-session";
+const STORAGE_KEY_PREFIX = "justnote:owner:";
+const CONNECT_SESSION_STORAGE_KEY = "justnote:connect-session";
 
 /* ============== connect session 本地记录 ============== */
 
@@ -444,7 +444,7 @@ function writeStorage(key: string, value: string): void {
   try {
     globalThis.localStorage?.setItem(key, value);
   } catch (err) {
-    console.error("[notes-demo] failed to write storage", err);
+    console.error("[justnote] failed to write storage", err);
   }
 }
 
@@ -461,7 +461,7 @@ export function removeStorage(key: string): boolean {
     globalThis.localStorage?.removeItem(key);
     return true;
   } catch (err) {
-    console.error("[notes-demo] failed to remove storage", err);
+    console.error("[justnote] failed to remove storage", err);
     return false;
   }
 }

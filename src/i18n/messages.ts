@@ -15,31 +15,29 @@ import type { Messages } from "./types";
 export const messages: Messages = {
   en: {
     // ----- 通用：app / brand -----
-    "app.brand": "Keymaster Notes",
-    "app.demoName": "Notes Demo",
-    "app.demoDescription":
-      "Encrypted notes workspace built on connect session and cipher.* — actually calls connect.* + cipher.* on the Keymaster provider.",
+    "app.brand": "Thresholdless note",
+    "app.title": "JustNote",
+    "app.tagline":
+      "A thresholdless, secure note stored in this browser.",
     // ----- Lock screen -----
     "lock.subtitle":
-      "An encrypted notes workspace built on connect.session and cipher.*. All note content is encrypted by the Keymaster provider; this demo only consumes the protocol.",
-    "lock.capabilities.title": "Required protocol capabilities",
-    "lock.capabilities.cipher.encrypt":
-      "cipher.encrypt",
-    "lock.capabilities.cipher.encrypt.desc":
-      "Encrypt note markdown UTF-8 bytes into nonce + cipherbytes on save.",
-    "lock.capabilities.cipher.decrypt":
-      "cipher.decrypt",
-    "lock.capabilities.cipher.decrypt.desc":
-      "Decrypt the ciphertext back into plain markdown when opening a note.",
-    "lock.capabilities.connect.login": "connect.login",
-    "lock.capabilities.connect.login.desc":
-      "Sign in and select a key; the session is bound to that key and is used by every later cipher call.",
-    "lock.capabilities.connect.resume": "connect.resume",
-    "lock.capabilities.connect.resume.desc":
-      "Restore the previously authorized session after refresh, popup close, or transport reconnect.",
-    "lock.capabilities.connect.logout": "connect.logout",
-    "lock.capabilities.connect.logout.desc":
-      "Explicitly revoke the current session. Only this path returns the user to the sign-in shell.",
+      "A thresholdless, secure note stored in this browser. Even with the same key, switching to another browser will not bring these notes back.",
+    "lock.highlights.title": "Why JustNote stays simple",
+    "lock.highlights.thresholdless.label": "Thresholdless",
+    "lock.highlights.thresholdless.desc":
+      "Open the page, choose a key when needed, and start writing without setup ceremonies.",
+    "lock.highlights.secure.label": "Secure by default",
+    "lock.highlights.secure.desc":
+      "Notes are encrypted before save and decrypted only when you open them.",
+    "lock.highlights.local.label": "Stored in this browser",
+    "lock.highlights.local.desc":
+      "Note data lives in the current browser on the current device, not in a shared cloud workspace.",
+    "lock.highlights.browserBound.label": "Browser-bound data",
+    "lock.highlights.browserBound.desc":
+      "Even with the same key, switching to another browser will not reveal the notes stored here.",
+    "lock.highlights.recovery.label": "Session recovery",
+    "lock.highlights.recovery.desc":
+      "After refresh, JustNote can try to restore the authorized session without changing your note data.",
     "lock.field.target.label": "Target origin / URL",
     "lock.field.target.placeholder": "e.g. {defaultOrigin}",
     "lock.field.target.hint.invalid":
@@ -63,7 +61,7 @@ export const messages: Messages = {
     "lock.status.resumeFailed.description":
       "The saved session is no longer valid. Please sign in again to obtain a new session.",
     "lock.footer":
-      "The demo persists the connect session id (no password, no popup unlock material). On refresh it tries to resume the session first; explicit logout returns to the sign-in shell. Notes data is partitioned locally by the bound owner's publicKey.",
+      "JustNote stores note data and session records on this browser only. It never stores your password. After refresh it first tries to resume the session; explicit sign-out returns to the sign-in screen.",
     // ----- Header -----
     "header.theme.label": "Theme",
     "header.theme.dark": "Dark",
@@ -306,9 +304,9 @@ export const messages: Messages = {
     "app.defaultNoteBaseName": "New note",
     "app.defaultFolderBaseName": "New folder",
     "app.encrypt.requestText":
-      "Encrypt current note markdown for Notes Demo",
+      "Encrypt current note markdown for JustNote",
     "app.connect.login.requestText":
-      "Start a connect session for Notes Demo and bind it to the selected key",
+      "Start a JustNote session and bind it to the selected key",
     "drag.reason.drop_to_note": "Cannot drop onto a note.",
     "drag.reason.drop_to_self":
       "Cannot move a folder into itself.",
@@ -321,31 +319,29 @@ export const messages: Messages = {
   },
   "zh-CN": {
     // ----- 通用：app / brand -----
-    "app.brand": "Keymaster Notes",
-    "app.demoName": "Notes Demo",
-    "app.demoDescription":
-      "基于 connect session 与 cipher.* 的加密笔记工作区——真实调用 connect.* + cipher.*。",
+    "app.brand": "无门槛 note",
+    "app.title": "JustNote",
+    "app.tagline":
+      "一个无门槛（Thresholdless）、安全、存储在当前浏览器的简单 note。",
     // ----- Lock screen -----
     "lock.subtitle":
-      "一个使用 connect session 与 cipher.* 的加密笔记工作区。所有正文真值由 Keymaster 提供方负责加解密，本 demo 仅做协议调用方。",
-    "lock.capabilities.title": "依赖的协议能力",
-    "lock.capabilities.cipher.encrypt":
-      "cipher.encrypt",
-    "lock.capabilities.cipher.encrypt.desc":
-      "保存 note 时把 markdown UTF-8 字节加密为 nonce + cipherbytes。",
-    "lock.capabilities.cipher.decrypt":
-      "cipher.decrypt",
-    "lock.capabilities.cipher.decrypt.desc":
-      "打开 note 时把密文还原为 markdown 明文。",
-    "lock.capabilities.connect.login": "connect.login",
-    "lock.capabilities.connect.login.desc":
-      "首次登录并选择 key；该 session 会绑定到这把 key，后续所有 cipher 调用都走这把 key。",
-    "lock.capabilities.connect.resume": "connect.resume",
-    "lock.capabilities.connect.resume.desc":
-      "页面刷新、popup 关闭重开、transport 重连后，用本地 sessionId 恢复已授权的 session。",
-    "lock.capabilities.connect.logout": "connect.logout",
-    "lock.capabilities.connect.logout.desc":
-      "显式吊销当前 session；只有这一条路径会把 caller 退回登录页。",
+      "一个无门槛（Thresholdless）、安全、存储在当前浏览器的简单 note。即便使用相同 key，换一个浏览器后，也找不到当前浏览器里存下的内容。",
+    "lock.highlights.title": "JustNote 的边界",
+    "lock.highlights.thresholdless.label": "无门槛",
+    "lock.highlights.thresholdless.desc":
+      "打开页面，需要时选一把 key，就可以直接开始写。",
+    "lock.highlights.secure.label": "默认安全",
+    "lock.highlights.secure.desc":
+      "保存前先加密，打开时再解密，不把正文直接暴露在存储里。",
+    "lock.highlights.local.label": "存储在当前浏览器",
+    "lock.highlights.local.desc":
+      "数据只保存在当前浏览器、当前设备里，不是共享云工作区。",
+    "lock.highlights.browserBound.label": "换浏览器就不是同一份数据",
+    "lock.highlights.browserBound.desc":
+      "即便使用相同 key，换一个浏览器后，也找不到当前浏览器里存下的内容。",
+    "lock.highlights.recovery.label": "可恢复会话",
+    "lock.highlights.recovery.desc":
+      "刷新页面后可尝试恢复已授权会话，但不会改变数据仍只在当前浏览器里的事实。",
     "lock.field.target.label": "Target origin / URL",
     "lock.field.target.placeholder": "例如 {defaultOrigin}",
     "lock.field.target.hint.invalid":
@@ -369,7 +365,7 @@ export const messages: Messages = {
     "lock.status.resumeFailed.description":
       "本地保存的 session 已失效。请重新登录以获取新 session。",
     "lock.footer":
-      "本 demo 仅持久化 connect sessionId（不持久化密码、不持久化 popup 解锁态）。刷新页面时优先尝试 resume；只有显式 logout 才会退回登录页。Notes 数据按绑定 owner 的 publicKey 本地分区保存。",
+      "JustNote 只在当前浏览器保存数据和会话记录，不保存密码。刷新页面时会优先尝试恢复 session；只有显式退出才会回到登录页。",
     // ----- Header -----
     "header.theme.label": "主题",
     "header.theme.dark": "黑",
@@ -595,8 +591,8 @@ export const messages: Messages = {
     "app.renameNoteConflictInline": "同目录下已有同名 note。",
     "app.defaultNoteBaseName": "新 note",
     "app.defaultFolderBaseName": "新文件夹",
-    "app.encrypt.requestText": "向 Notes Demo 加密当前 note 的 markdown",
-    "app.connect.login.requestText": "为 Notes Demo 建立 connect session 并绑定到选定的 key",
+    "app.encrypt.requestText": "为 JustNote 加密当前 note 的 markdown",
+    "app.connect.login.requestText": "为 JustNote 建立会话，并绑定到选定的 key",
     "drag.reason.drop_to_note": "不能把内容拖到 note 上。",
     "drag.reason.drop_to_self": "不能把文件夹拖到自己内部。",
     "drag.reason.drop_to_descendant": "不能把文件夹拖到自己的后代下面。",
@@ -606,31 +602,29 @@ export const messages: Messages = {
   },
   ja: {
     // ----- 共通：app / brand -----
-    "app.brand": "Keymaster Notes",
-    "app.demoName": "Notes Demo",
-    "app.demoDescription":
-      "connect session と cipher.* による暗号化ノートワークスペース。実体は connect.* + cipher.* を呼び出します。",
+    "app.brand": "Thresholdless note",
+    "app.title": "JustNote",
+    "app.tagline":
+      "敷居が低く、安全で、このブラウザに保存されるシンプルな note。",
     // ----- Lock screen -----
     "lock.subtitle":
-      "connect session と cipher.* を使った暗号化ノートワークスペース。本体の内容はすべて Keymaster プロバイダが暗号化／復号し、本デモはプロトコルの呼び出し側だけです。",
-    "lock.capabilities.title": "依存するプロトコル機能",
-    "lock.capabilities.cipher.encrypt":
-      "cipher.encrypt",
-    "lock.capabilities.cipher.encrypt.desc":
-      "ノート保存時に markdown の UTF-8 バイト列を nonce + cipherbytes に暗号化します。",
-    "lock.capabilities.cipher.decrypt":
-      "cipher.decrypt",
-    "lock.capabilities.cipher.decrypt.desc":
-      "ノートを開くときに暗号文を平文 markdown に復号します。",
-    "lock.capabilities.connect.login": "connect.login",
-    "lock.capabilities.connect.login.desc":
-      "初回ログインし key を選択。その session はその key に紐付けられ、以降の cipher.* 呼び出しはこの key を使用します。",
-    "lock.capabilities.connect.resume": "connect.resume",
-    "lock.capabilities.connect.resume.desc":
-      "ページ再読み込み、ポップアップ再起動、transport 再接続後、保存済み sessionId で認可済み session を復元します。",
-    "lock.capabilities.connect.logout": "connect.logout",
-    "lock.capabilities.connect.logout.desc":
-      "現在の session を明示的に失効させます。サインイン画面に戻すのはこの経路だけです。",
+      "敷居が低く、安全で、このブラウザに保存されるシンプルな note です。同じ key を使っても、別のブラウザではこのノートを見つけられません。",
+    "lock.highlights.title": "JustNote の前提",
+    "lock.highlights.thresholdless.label": "Thresholdless",
+    "lock.highlights.thresholdless.desc":
+      "ページを開き、必要なときだけ key を選べば、すぐに書き始められます。",
+    "lock.highlights.secure.label": "安全が既定",
+    "lock.highlights.secure.desc":
+      "保存前に暗号化し、開くときだけ復号します。本文をそのまま保存しません。",
+    "lock.highlights.local.label": "このブラウザに保存",
+    "lock.highlights.local.desc":
+      "データは現在のブラウザ・現在の端末にだけ保存され、共有クラウドには置きません。",
+    "lock.highlights.browserBound.label": "ブラウザが変われば別データ",
+    "lock.highlights.browserBound.desc":
+      "同じ key を使っても、別のブラウザではこのブラウザのノートは見つかりません。",
+    "lock.highlights.recovery.label": "session を再開",
+    "lock.highlights.recovery.desc":
+      "再読み込み後は認可済み session の復元を試せますが、データの保存先は変わりません。",
     "lock.field.target.label": "Target origin / URL",
     "lock.field.target.placeholder": "例：{defaultOrigin}",
     "lock.field.target.hint.invalid":
@@ -656,7 +650,7 @@ export const messages: Messages = {
     "lock.status.resumeFailed.description":
       "保存済みの session は無効です。再度サインインして新しい session を取得してください。",
     "lock.footer":
-      "本デモが永続化するのは connect sessionId のみです（パスワードも popup のアンロック素材も保存しません）。再読み込み時はまず resume を試み、明示的な logout だけがサインイン画面に戻します。ノートデータはバインドされたオーナーの publicKey でローカルにパーティション化されます。",
+      "JustNote はこのブラウザにだけデータと session 記録を保存し、パスワードは保存しません。再読み込み時はまず session の再開を試み、明示的なサインアウトだけがログイン画面に戻します。",
     // ----- Header -----
     "header.theme.label": "テーマ",
     "header.theme.dark": "ダーク",
@@ -909,9 +903,9 @@ export const messages: Messages = {
     "app.defaultNoteBaseName": "新規 note",
     "app.defaultFolderBaseName": "新規フォルダ",
     "app.encrypt.requestText":
-      "現在の note の markdown を Notes Demo 向けに暗号化",
+      "JustNote のために現在の note の markdown を暗号化",
     "app.connect.login.requestText":
-      "Notes Demo 用の connect session を確立し、選択した key に紐付けます",
+      "JustNote の session を開始し、選択した key に紐付けます",
     "drag.reason.drop_to_note": "note にドロップすることはできません。",
     "drag.reason.drop_to_self":
       "フォルダを自分自身の下には移動できません。",

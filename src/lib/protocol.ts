@@ -7,12 +7,12 @@
 //          硬切换）：
 //   - 本项目接 `connect.login` / `connect.resume` / `connect.logout` 作为
 //     持续登录的真值（**取代**旧的 `identity.get` 一次性身份断言）；
-//   - 保留 `connect.*` / `cipher.encrypt` / `cipher.decrypt` 作为本 demo
+//   - 保留 `connect.*` / `cipher.encrypt` / `cipher.decrypt` 作为 JustNote
 //     实际主流程；`cipher.*` 必须按 session 绑定 key 执行，**不**依赖全局 active key。
 //   - 保留 `identity.get` 作为可选业务方法壳，但其参数已显式包含
 //     `connectSessionId`（与上游 002 对齐）。它的定位是"会话内身份断言能力"，
-//     **不是**登录入口；本 demo 当前不把它接入 UI / 状态机。
-//   - 砍掉 `intent.sign` / `p2pkh.*` / `feepool.*`——这些方法与本 demo 无关。
+//     **不是**登录入口；JustNote 当前不把它接入 UI / 状态机。
+//   - 砍掉 `intent.sign` / `p2pkh.*` / `feepool.*`——这些方法与 JustNote 无关。
 //   - 类型与依赖项目 (`keymaster.cc`) 的 contract 对齐，但只暴露本项目需要的
 //     六种方法，避免 UI / 状态面被多余协议拉大。
 
@@ -116,9 +116,9 @@ export type PopupConnectionState = "opening" | "connected" | "disconnected";
  *          硬切换第 4.1 章）：
  *   - 这是**会话内业务方法**，不是登录入口。subject 来自 session 绑定 owner；
  *   - 必填 `connectSessionId`：服务端按 session 找到绑定 key 来生成断言；
- *   - 缺 `connectSessionId` 的 `identity.get` 请求在协议层**不**成立——本 demo
+ *   - 缺 `connectSessionId` 的 `identity.get` 请求在协议层**不**成立——JustNote
  *     不接受任何"旧版 `identity.get`"降级路径；
- *   - 本 demo 当前不把它接入 UI / 状态机；这里只暴露 contract 同步上游 002。
+ *   - JustNote 当前不把它接入 UI / 状态机；这里只暴露 contract 同步上游 002。
  */
 export interface IdentityGetParams {
   /** 业务 session id；按此找到绑定 owner。 */

@@ -3,7 +3,7 @@
 //
 // 设计缘由（施工单第 6 章 + 2026-06-27 note-open-cancel-and-transport-hard-switch
 //          第 4.2 / 5.5 / 8.3 章）：
-//   - 同一 demo 页面，对同一 `targetOrigin`，只维护一个 popup 会话。
+//   - 同一 JustNote 页面，对同一 `targetOrigin`，只维护一个 popup 会话。
 //   - 首次 `ensureSession()` 时若没有 popup 句柄就开窗、等一次 `ready`。
 //   - 后续 `runRequest()` 复用现有 popup 句柄：不再 `window.open`。
 //   - popup 会话**并行**接受多条 request；不再做"同一时刻只允许一条在途"的
@@ -55,7 +55,7 @@ import {
   type ProtocolLogStage
 } from "./connectClient";
 
-const POPUP_NAME = "keymaster-notes-demo";
+const POPUP_NAME = "justnote";
 
 export interface PopupSessionClientOptions {
   targetOrigin: string;

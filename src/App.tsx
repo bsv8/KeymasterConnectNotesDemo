@@ -1,5 +1,5 @@
 // src/App.tsx
-// Notes Demo 页面级状态与编排。
+// JustNote 页面级状态与编排。
 //
 // 设计缘由（施工单 2026-06-26 save-switch-current-editor-state 第 4-10 章 +
 //          施工单 2026-06-27 note-open-cancel-and-transport-hard-switch
@@ -29,7 +29,7 @@
 //         `restoring`（解密中） / `unlocked` / `failed`（decryptFailed）。
 //   - 启动时：读取本地 `connectSession`；若有 → 自动 `resume`；若 resume
 //     命中"session 无效" → 清本地 + 退回登录壳。
-//   - **不再**把 `identity.get` 当登录入口真值；本 demo 只发 `connect.login`
+//   - **不再**把 `identity.get` 当登录入口真值；JustNote 只发 `connect.login`
 //     / `connect.resume` / `connect.logout`。
 //   - `cipher.*` 请求**必须**带 `connectSessionId`；**不**读全局 active key。
 //   - **锁屏页 popup_closed 收口**（施工单 2026-06-28 003 第 4.2 / 5.1 / 5.2 章）：
@@ -141,7 +141,7 @@ const MOBILE_BREAKPOINT = 720;
  * 与 `IdentitySnapshot` 严格区分：
  *   - `IdentitySnapshot` 是旧的 `identity.get` 一次性身份断言；
  *   - 本接口是 connect session 真值；
- *   - 本 demo **不再**使用 `IdentitySnapshot`；它的字段命名已被替代为更明确的
+ *   - JustNote **不再**使用 `IdentitySnapshot`；它的字段命名已被替代为更明确的
  *     `ownerPublicKeyHex`（明确表达"该 session 绑定 key 的公钥"）。
  */
 export interface ConnectSessionSnapshot {
@@ -539,7 +539,7 @@ export default function App() {
    *   - 只跑**一次**（依赖 `[]`，mount 期触发）；
    *   - 与 `targetOrigin` effect 互不冲突：origin 变化会清 session，下次启动
    *     自然走 "跨 origin" 分支。
-   *   - 本 demo **不**实现"refresh 后立刻 retry resume N 次"——
+   *   - JustNote **不**实现"refresh 后立刻 retry resume N 次"——
    *     popup 失败由用户主动点"重试 / 重新登录"。
    */
   useEffect(() => {
@@ -641,7 +641,7 @@ export default function App() {
   /* ============== 日志 ============== */
 
   function pushLog(event: ProtocolLogEvent) {
-    const prefix = `[notes-demo][${event.method ?? "system"}][${event.stage}]`;
+    const prefix = `[justnote][${event.method ?? "system"}][${event.stage}]`;
     if (event.stage === "timeout" || event.stage === "busy_rejected") {
       console.error(prefix, event);
     } else {
@@ -2332,8 +2332,8 @@ export default function App() {
       <header className="app-header">
         <div className="app-header__brand">
           <span className="app-header__eyebrow">{t("app.brand")}</span>
-          <h1>{t("app.demoName")}</h1>
-          <p>{t("app.demoDescription")}</p>
+          <h1>{t("app.title")}</h1>
+          <p>{t("app.tagline")}</p>
         </div>
         <button
           type="button"

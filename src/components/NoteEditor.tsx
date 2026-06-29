@@ -77,7 +77,7 @@ export function NoteEditor(props: NoteEditorProps) {
       <div className="editor editor-loading" role="status" aria-live="polite" aria-label={t("editor.loading.title")}>
         <div className="editor-loading__site">
           <div className="editor-loading__sign">
-            <span className="editor-loading__eyebrow">Keymaster Connect</span>
+            <span className="editor-loading__eyebrow">JustNote</span>
             <strong className="editor-loading__title">{t("editor.loading.title")}</strong>
             <span className="editor-loading__hint">{t("editor.loading.hint")}</span>
             <span className="editor-loading__note">{t("editor.loading.note")}</span>
@@ -122,7 +122,7 @@ async function loadMarkdown(editor: BlockNoteEditor, markdown: string): Promise<
     const blocks = await editor.tryParseMarkdownToBlocks(markdown);
     await safeReplace(editor, blocks);
   } catch (err) {
-    console.error("[notes-demo] failed to parse markdown", err);
+    console.error("[justnote] failed to parse markdown", err);
     // 解析失败：把原文作为单一 paragraph 灌入，避免丢内容。
     await safeReplace(editor, [{ type: "paragraph", content: [{ type: "text", text: markdown }] }]);
   }
@@ -132,6 +132,6 @@ async function safeReplace(editor: BlockNoteEditor, blocks: unknown): Promise<vo
   try {
     editor.replaceBlocks(editor.document, blocks as never);
   } catch (err) {
-    console.error("[notes-demo] replaceBlocks failed", err);
+    console.error("[justnote] replaceBlocks failed", err);
   }
 }

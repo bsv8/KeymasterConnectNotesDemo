@@ -147,32 +147,32 @@ export function LockScreen(props: LockScreenProps) {
       <div className="lock-screen__panel">
         <header className="lock-screen__header">
           <span className="lock-screen__eyebrow">{t("app.brand")}</span>
-          <h1 className="lock-screen__title">{t("app.demoName")}</h1>
+          <h1 className="lock-screen__title">{t("app.title")}</h1>
           <p className="lock-screen__subtitle">{t("lock.subtitle")}</p>
         </header>
 
-        <section className="lock-screen__capabilities" aria-label={t("lock.capabilities.title")}>
-          <h2 className="lock-screen__section-title">{t("lock.capabilities.title")}</h2>
+        <section className="lock-screen__capabilities" aria-label={t("lock.highlights.title")}>
+          <h2 className="lock-screen__section-title">{t("lock.highlights.title")}</h2>
           <ul>
             <li>
-              <code>{t("lock.capabilities.connect.login")}</code>
-              <span>{t("lock.capabilities.connect.login.desc")}</span>
+              <strong>{t("lock.highlights.thresholdless.label")}</strong>
+              <span>{t("lock.highlights.thresholdless.desc")}</span>
             </li>
             <li>
-              <code>{t("lock.capabilities.connect.resume")}</code>
-              <span>{t("lock.capabilities.connect.resume.desc")}</span>
+              <strong>{t("lock.highlights.secure.label")}</strong>
+              <span>{t("lock.highlights.secure.desc")}</span>
             </li>
             <li>
-              <code>{t("lock.capabilities.connect.logout")}</code>
-              <span>{t("lock.capabilities.connect.logout.desc")}</span>
+              <strong>{t("lock.highlights.local.label")}</strong>
+              <span>{t("lock.highlights.local.desc")}</span>
             </li>
             <li>
-              <code>{t("lock.capabilities.cipher.encrypt")}</code>
-              <span>{t("lock.capabilities.cipher.encrypt.desc")}</span>
+              <strong>{t("lock.highlights.browserBound.label")}</strong>
+              <span>{t("lock.highlights.browserBound.desc")}</span>
             </li>
             <li>
-              <code>{t("lock.capabilities.cipher.decrypt")}</code>
-              <span>{t("lock.capabilities.cipher.decrypt.desc")}</span>
+              <strong>{t("lock.highlights.recovery.label")}</strong>
+              <span>{t("lock.highlights.recovery.desc")}</span>
             </li>
           </ul>
         </section>

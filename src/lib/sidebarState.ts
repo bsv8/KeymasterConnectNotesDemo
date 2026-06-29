@@ -13,7 +13,7 @@
 //   - 已不存在的 folderId 在加载时静默丢弃——避免 folder 删除后留下垃圾数据。
 
 /** sidebar 展开状态 storage key 前缀。 */
-const STORAGE_KEY_PREFIX = "notes-demo:sidebar:";
+const STORAGE_KEY_PREFIX = "justnote:sidebar:";
 
 /** 构造 owner 级别 storage key。 */
 export function sidebarStateKeyForOwner(ownerPublicKeyHex: string): string {
@@ -61,6 +61,6 @@ export function saveOwnerSidebarState(ownerPublicKeyHex: string, folderIds: stri
   try {
     globalThis.localStorage?.setItem(key, JSON.stringify(folderIds));
   } catch (err) {
-    console.error("[notes-demo] failed to write sidebar state", err);
+    console.error("[justnote] failed to write sidebar state", err);
   }
 }

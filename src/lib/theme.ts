@@ -9,7 +9,7 @@
 export type AppThemePreference = "system" | "light" | "dark";
 export type ResolvedAppTheme = "light" | "dark";
 
-const APP_THEME_STORAGE_KEY = "notes-demo:theme-preference";
+const APP_THEME_STORAGE_KEY = "justnote:theme-preference";
 const SYSTEM_THEME_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 /** 读取用户主题偏好；非法值直接回退到 `system`。 */

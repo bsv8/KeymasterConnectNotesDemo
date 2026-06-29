@@ -10,7 +10,7 @@
 //   - 这里集中处理 `aud`、origin 校验、BinaryField 转换、connectSessionId 注入。
 //   - `connect.login` / `connect.resume` / `connect.logout` 是持续登录的真值。
 //   - `identity.get` 旧 helper 仍保留，但其 contract 已切到 session-bound：
-//     必须显式传入 `connectSessionId`；定位是"会话内身份断言能力"，本 demo
+//     必须显式传入 `connectSessionId`；定位是"会话内身份断言能力"，JustNote
 //     自身当前不再调用它。
 //   - `cipher.*` **必须**带 `connectSessionId`；服务端按 session 绑定 key 执行，
 //     **不**依赖全局 active key（施工单 2026-06-28 001 第 5.2 章）。
@@ -151,17 +151,17 @@ export function parseConnectLogoutResult(result: ConnectLogoutResult): {
   };
 }
 
-/* ============== 旧 identity.get（保留为可选会话内能力；本 demo 当前不再调用） ============== */
+/* ============== 旧 identity.get（保留为可选会话内能力；JustNote 当前不再调用） ============== */
 
 /**
  * 构造 `identity.get` 协议请求。
  *
  * 设计缘由（施工单 2026-06-28 002 protocol-business-methods-bind-connect-session
  *          硬切换第 4.1 / 7.3 章）：
- *   - `identity.get` 在本 demo 中保留为可选的"会话内身份断言能力"，**不**是登录入口；
+ *   - `identity.get` 在 JustNote 中保留为可选的"会话内身份断言能力"，**不**是登录入口；
  *   - contract 已切到 session-bound：调用方**必须**显式传入 `connectSessionId`，
  *     否则抛错；构造出来的 params 也必须带 `connectSessionId`；
- *   - 本 demo 当前 UI / 状态机不再调用它；helper 留在这里是为了后续接入时
+ *   - JustNote 当前 UI / 状态机不再调用它；helper 留在这里是为了后续接入时
  *     直接对齐上游 002 的 contract，而不是继续构造旧版缺 sessionId 的请求。
  */
 export function buildIdentityGetRequest(options: {

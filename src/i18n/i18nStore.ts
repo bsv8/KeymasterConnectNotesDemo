@@ -16,7 +16,7 @@
 import { resolveBrowserLanguage, resolveLanguageTag } from "./languageMap";
 import type { LanguageMode, SupportedLanguage } from "./types";
 
-const LANGUAGE_STORAGE_KEY = "notes-demo:language";
+const LANGUAGE_STORAGE_KEY = "justnote:language";
 const HTML_LANG_DEFAULT = "en";
 
 interface PersistedLanguage {

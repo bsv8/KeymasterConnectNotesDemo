@@ -3,7 +3,7 @@
 //
 // 设计缘由（施工单第 6 章 + 2026-06-27 note-open-cancel-and-transport-hard-switch
 //          第 4.2 / 8.2 章）：
-//   - popup 复用策略与现有 demo 对齐：单页只维护一个 popup session client。
+//   - popup 复用策略与当前应用对齐：单页只维护一个 popup session client。
 //   - 本文件只暴露 transport 原子：开窗、消息监听、close 轮询、
 //     targetOrigin 校验、消息分发。session 生命周期由 session client 拥有。
 //   - **保留** `result` 派发到 `requestId` 的回调注册：分发器**永远**按
@@ -133,7 +133,7 @@ export function createResultDispatcher(targetOrigin: string): ResultDispatcher {
       return;
     }
     if (typeof event.origin === "string" && normalizeOrigin(event.origin) !== expected) {
-      console.error("[notes-demo] invalid message origin", {
+      console.error("[justnote] invalid message origin", {
         eventOrigin: event.origin,
         expectedOrigin: expected
       });
