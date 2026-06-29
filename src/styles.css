@@ -160,8 +160,10 @@ code {
 .app-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 24px;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
   flex: 0 0 auto;
@@ -169,27 +171,18 @@ code {
 
 .app-header__brand {
   display: flex;
-  flex-direction: column;
-  min-width: 220px;
-}
-
-.app-header__eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .app-header__brand h1 {
-  margin: 2px 0 0;
-  font-size: 16px;
+  margin: 0;
+  font-size: 15px;
   font-weight: 600;
-}
-
-.app-header__brand p {
-  margin: 2px 0 0;
-  font-size: 12.5px;
-  color: var(--color-text-soft);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 /*
@@ -202,78 +195,90 @@ code {
 .app-header__sidebar-toggle {
   display: none;
   appearance: none;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-bg);
-  color: var(--color-text);
-  padding: 6px 12px;
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-soft);
+  padding: 7px 10px;
+  border-radius: 8px;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .app-header__sidebar-toggle:hover:not(:disabled) {
   background: var(--color-bg-hover);
+  color: var(--color-text);
 }
 
-.app-header__theme {
+.app-header__tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.app-header__controls {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  color: var(--color-text-soft);
-  font-size: 12.5px;
-  font-weight: 500;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-soft);
+  box-shadow: var(--shadow-soft);
 }
 
-.app-header__theme select {
-  appearance: none;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-bg);
-  color: var(--color-text);
-  padding: 6px 28px 6px 10px;
-  border-radius: var(--radius-md);
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.app-header__theme select:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-
-.app-header__theme select:focus {
-  outline: 2px solid var(--color-accent-soft);
-  outline-offset: 1px;
-}
-
-/* 语言切换器：与 theme 选择器同形态；放在一起作为 header 控制区。 */
-.app-header__language {
+.app-header__control {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  color: var(--color-text-soft);
-  font-size: 12.5px;
-  font-weight: 500;
 }
 
-.app-header__language select {
+.app-header__control::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--color-text-muted);
+  border-bottom: 1.5px solid var(--color-text-muted);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+
+.app-header__control select {
   appearance: none;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-bg);
-  color: var(--color-text);
-  padding: 6px 28px 6px 10px;
-  border-radius: var(--radius-md);
+  border: none;
+  background: transparent;
+  color: var(--color-text-soft);
+  padding: 7px 28px 7px 10px;
+  border-radius: 8px;
+  min-height: 32px;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
 }
 
-.app-header__language select:hover:not(:disabled) {
+.app-header__control select:hover:not(:disabled) {
   background: var(--color-bg-hover);
+  color: var(--color-text);
 }
 
-.app-header__language select:focus {
-  outline: 2px solid var(--color-accent-soft);
-  outline-offset: 1px;
+.app-header__control select:focus {
+  outline: none;
+  background: var(--color-bg-active);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong), 0 0 0 2px var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.app-header__control--language select {
+  min-width: 58px;
+}
+
+.app-header__control--theme select {
+  min-width: 82px;
 }
 
 /* ============== app banner ============== */
@@ -349,41 +354,10 @@ code {
 /* ============== connect status ============== */
 
 .connect-status {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 24px;
-  padding: 8px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-soft);
-}
-
-.connect-status__indicator {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-width: 100px;
-}
-
-.connect-status__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-text-muted);
-}
-
-.connect-status__dot--opening {
-  background: var(--color-warning);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-.connect-status__dot--connected {
-  background: var(--color-success);
-}
-
-.connect-status__dot--disconnected {
-  background: var(--color-error);
+  flex-shrink: 0;
 }
 
 @keyframes pulse {
@@ -396,63 +370,98 @@ code {
   }
 }
 
-.connect-status__label {
-  font-size: 12.5px;
+.connect-status__pill,
+.connect-status__logout {
+  appearance: none;
+  border: 1px solid var(--color-border);
+  background: transparent;
   color: var(--color-text-soft);
-}
-
-.connect-status__meta {
-  display: flex;
-  gap: 24px;
-  flex: 1 1 auto;
-}
-
-.connect-status__row {
-  display: flex;
-  flex-direction: column;
-  font-size: 11px;
-}
-
-.connect-status__row span {
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 2px;
-}
-
-.connect-status__row strong {
-  font-weight: 500;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
   font-size: 12.5px;
-  color: var(--color-text);
-  font-family: var(--font-mono);
+  font-weight: 600;
+  line-height: 1;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
-.connect-status__actions {
-  display: flex;
+.connect-status__pill {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  box-shadow: var(--shadow-soft);
+}
+
+.connect-status__pill:not(:disabled) {
+  cursor: pointer;
+}
+
+.connect-status__pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
   flex-shrink: 0;
 }
 
-.connect-status__forget {
-  color: var(--color-error);
+.connect-status__pill--success {
+  background: rgba(15, 123, 15, 0.12);
+  border-color: rgba(15, 123, 15, 0.22);
+  color: var(--color-success);
 }
 
-/*
- * "删除当前本地数据" 按钮：
- *   - 复用 secondary-button；不引入新的视觉系统。
- *   - 危险动作，但样式弱于主操作：仅色调 + 边框 + hover 背景轻微变红，
- *     不变成实心红色按钮。
- *   - 与 `.connect-status__forget`（切换身份）区分：切换身份只是换壳，
- *     删除是清空本地空间，所以删除按钮边框与 hover 红色更明显一点。
- */
-.connect-status__delete {
-  color: var(--color-error);
-  border-color: rgba(212, 76, 71, 0.4);
-}
-
-.connect-status__delete:hover:not(:disabled) {
+.connect-status__pill--danger {
   background: var(--color-error-soft);
-  border-color: rgba(212, 76, 71, 0.6);
+  border-color: rgba(212, 76, 71, 0.22);
+  color: var(--color-error);
+}
+
+.connect-status__pill--pending {
+  background: var(--color-warning-soft);
+  border-color: rgba(203, 145, 47, 0.24);
+  color: var(--color-warning);
+}
+
+.connect-status__pill--pending .connect-status__pill-dot {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.connect-status__pill:hover:not(:disabled),
+.connect-status__logout:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+.connect-status__pill--success:hover:not(:disabled) {
+  background: rgba(15, 123, 15, 0.18);
+  color: var(--color-success);
+}
+
+.connect-status__pill--danger:hover:not(:disabled) {
+  background: rgba(212, 76, 71, 0.14);
+  color: var(--color-error);
+}
+
+.connect-status__pill--pending:hover:not(:disabled) {
+  background: rgba(203, 145, 47, 0.14);
+  color: var(--color-warning);
+}
+
+.connect-status__pill:disabled,
+.connect-status__logout:disabled {
+  opacity: 1;
+}
+
+.connect-status__pill:disabled {
+  cursor: default;
+}
+
+.connect-status__logout {
+  box-shadow: none;
+}
+
+.connect-status__logout:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
 }
 
 /* ============== buttons ============== */
@@ -1876,31 +1885,36 @@ code {
   }
 
   .app-header__brand {
-    min-width: 0;
-  }
-
-  .app-header__brand p {
-    display: none;
+    width: 100%;
   }
 
   .app-header__sidebar-toggle {
     display: inline-flex;
-    order: 99;
+    order: 0;
   }
 
-  .app-header__theme {
-    order: 98;
-    margin-left: auto;
+  .app-header__tools {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .app-header__controls {
+    min-width: 0;
+  }
+
+  .app-header__control--theme select {
+    min-width: 72px;
   }
 
   .connect-status {
-    flex-wrap: wrap;
-    padding: 6px 10px;
+    margin-left: auto;
   }
 
-  .connect-status__meta {
-    flex-wrap: wrap;
-    gap: 8px 16px;
+  .connect-status__pill,
+  .connect-status__logout {
+    min-height: 34px;
+    padding: 0 12px;
   }
 
   .workspace {

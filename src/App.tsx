@@ -77,7 +77,6 @@ import {
   createFolder,
   deleteFolder,
   deleteNote,
-  deleteOwnerSpace,
   findAvailableName,
   getFolder,
   isFolderEmpty,
@@ -122,7 +121,7 @@ import { LockScreen, type LockScreenMode } from "./components/LockScreen";
 import { NameInputDialog } from "./components/NameInputDialog";
 import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
 import { SearchResultsPanel, buildSearchResults } from "./components/SearchResultsPanel";
-import { LANGUAGE_DISPLAY, SUPPORTED_LANGUAGES } from "./i18n/types";
+import { SUPPORTED_LANGUAGES, type SupportedLanguage } from "./i18n/types";
 import { useI18n } from "./i18n/useI18n";
 
 const DEFAULT_TARGET_ORIGIN = "https://keymaster.cc";
@@ -133,6 +132,13 @@ const POPUP_HEIGHT = 760;
 
 /** 窄屏判定阈值：与 styles.css 中的媒体查询保持一致。 */
 const MOBILE_BREAKPOINT = 720;
+
+/** header 语言选择器使用短标签，避免工具带退化成设置表单。 */
+const HEADER_LANGUAGE_LABEL: Record<SupportedLanguage, string> = {
+  en: "EN",
+  "zh-CN": "中",
+  ja: "日"
+};
 
 /**
  * Connect session 内存态（施工单 2026-06-28 001 第 4.2 / 8.3 章）。
@@ -2191,7 +2197,7 @@ export default function App() {
     return null;
   }, [bannerKind, lastError, decryptError, currentEditorState?.decryptFailed, t]);
 
-  /* ============== 切换身份 / 删除当前数据 共用的退出清理 ============== */
+  /* ============== 退回登录壳的统一清理 ============== */
 
   /**
    * 退出工作区 → 退回 LockScreen 时**统一**收口清空 notes 工作区内存态。
@@ -2230,36 +2236,6 @@ export default function App() {
     setActiveTag(null);
     // sidebar 展开状态：清空。下一位 owner 登录时会按自己的记录重新加载。
     setExpandedFolderIds(new Set());
-  }
-
-  /**
-   * 切换身份 / 更换登录器：只退回登录壳，**不**删本地数据。
-   */
-  function handleSwitchIdentity() {
-    exitWorkspace();
-  }
-
-  /* ============== 删除当前 owner 本地数据 ============== */
-
-  function handleDeleteCurrentOwnerData() {
-    if (!session || authFlow !== null) return;
-    const ownerHex = session.ownerPublicKeyHex;
-    setConfirmDialog({
-      title: t("app.deleteDataConfirm.title"),
-      message: t("app.deleteDataConfirm.message"),
-      confirmLabel: t("app.deleteDataConfirm.confirm"),
-      cancelLabel: t("app.deleteDataConfirm.cancel"),
-      onCancel: () => setConfirmDialog(null),
-      onConfirm: () => {
-        setConfirmDialog(null);
-        const ok = deleteOwnerSpace(ownerHex);
-        if (!ok) {
-          setLastError(t("app.error.deleteCurrentDataFailed"));
-          return;
-        }
-        exitWorkspace();
-      }
-    });
   }
 
   /* ============== 顶层渲染 ============== */
@@ -2331,59 +2307,51 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="app-header__brand">
-          <span className="app-header__eyebrow">{t("app.brand")}</span>
+          <button
+            type="button"
+            className="app-header__sidebar-toggle"
+            onClick={() => setIsSidebarOpenOnMobile((v) => !(v ?? false))}
+            aria-label={sidebarOpen ? t("header.sidebar.toggle.expand") : t("header.sidebar.toggle.collapse")}
+            aria-expanded={sidebarOpen}
+          >
+            {sidebarOpen ? t("header.sidebar.toggle.close") : t("header.sidebar.toggle.open")}
+          </button>
           <h1>{t("app.title")}</h1>
-          <p>{t("app.tagline")}</p>
         </div>
-        <button
-          type="button"
-          className="app-header__sidebar-toggle"
-          onClick={() => setIsSidebarOpenOnMobile((v) => !(v ?? false))}
-          aria-label={sidebarOpen ? t("header.sidebar.toggle.expand") : t("header.sidebar.toggle.collapse")}
-          aria-expanded={sidebarOpen}
-        >
-          {sidebarOpen ? t("header.sidebar.toggle.close") : t("header.sidebar.toggle.open")}
-        </button>
-        <label className="app-header__theme">
-          <span>{t("header.theme.label")}</span>
-          <select
-            value={themePreference}
-            onChange={(e) => setThemePreference(e.target.value as AppThemePreference)}
-            aria-label={t("header.theme.aria")}
-          >
-            <option value="dark">{t("header.theme.dark")}</option>
-            <option value="light">{t("header.theme.light")}</option>
-            <option value="system">{t("header.theme.system")}</option>
-          </select>
-        </label>
-        <label className="app-header__language">
-          <span>{t("header.language.label")}</span>
-          <select
-            value={language}
-            onChange={(e) => setLanguage(e.target.value as typeof language)}
-            aria-label={t("header.language.aria")}
-          >
-            {SUPPORTED_LANGUAGES.map((code) => (
-              <option key={code} value={code}>
-                {LANGUAGE_DISPLAY[code]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <ConnectStatus
-          state={popupState}
-          currentOrigin={currentOrigin}
-          targetOrigin={normalizedTargetOrigin || targetOrigin}
-          publicKeyHex={session?.ownerPublicKeyHex ?? null}
-          sessionId={session?.sessionId ?? null}
-          lastLoginAt={session?.resolvedAt ?? null}
-          isLoggingIn={authFlow !== null}
-          onLogin={() => void handleLogin()}
-          onResume={() => void handleResume()}
-          onForget={handleSwitchIdentity}
-          onLogout={() => void handleLogout()}
-          onDeleteCurrentData={handleDeleteCurrentOwnerData}
-        />
+        <div className="app-header__tools">
+          <div className="app-header__controls">
+            <div className="app-header__control app-header__control--language" title={t("header.language.label")}>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value as typeof language)}
+                aria-label={t("header.language.aria")}
+              >
+                {SUPPORTED_LANGUAGES.map((code) => (
+                  <option key={code} value={code}>
+                    {HEADER_LANGUAGE_LABEL[code]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="app-header__control app-header__control--theme" title={t("header.theme.label")}>
+              <select
+                value={themePreference}
+                onChange={(e) => setThemePreference(e.target.value as AppThemePreference)}
+                aria-label={t("header.theme.aria")}
+              >
+                <option value="dark">{t("header.theme.dark")}</option>
+                <option value="light">{t("header.theme.light")}</option>
+                <option value="system">{t("header.theme.system")}</option>
+              </select>
+            </div>
+          </div>
+          <ConnectStatus
+            state={popupState}
+            isLoggingIn={authFlow !== null}
+            onResume={() => void handleResume()}
+            onLogout={() => void handleLogout()}
+          />
+        </div>
       </header>
 
       {/*

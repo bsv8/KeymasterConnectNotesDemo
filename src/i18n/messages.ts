@@ -76,7 +76,7 @@ export const messages: Messages = {
     "header.language.aria": "Select language",
     // ----- Connect status -----
     "connect.state.idle": "Not connected",
-    "connect.state.opening": "Opening popup...",
+    "connect.state.opening": "Connecting...",
     "connect.state.connected": "Ready",
     "connect.state.disconnected": "Disconnected",
     "connect.row.pageOrigin": "page origin",
@@ -89,7 +89,7 @@ export const messages: Messages = {
     "connect.action.login": "Sign in again",
     "connect.action.login.title":
       "Start a brand-new connect.login flow; this abandons the current resume attempt",
-    "connect.action.resume": "Resume session",
+    "connect.action.resume": "Reconnect",
     "connect.action.resume.title":
       "Re-open the popup and call connect.resume with the saved sessionId",
     "connect.action.forget": "Switch identity / change provider",
@@ -380,7 +380,7 @@ export const messages: Messages = {
     "header.language.aria": "选择语言",
     // ----- Connect status -----
     "connect.state.idle": "未连接",
-    "connect.state.opening": "拉起 popup…",
+    "connect.state.opening": "连接中...",
     "connect.state.connected": "已就绪",
     "connect.state.disconnected": "已断开",
     "connect.row.pageOrigin": "page origin",
@@ -392,7 +392,7 @@ export const messages: Messages = {
     "connect.row.sessionId.empty": "无 session",
     "connect.action.login": "重新登录",
     "connect.action.login.title": "从头走一次 connect.login；放弃当前 resume 尝试",
-    "connect.action.resume": "恢复 session",
+    "connect.action.resume": "恢复连接",
     "connect.action.resume.title": "重开 popup 并用本地 sessionId 调 connect.resume",
     "connect.action.forget": "切换身份 / 更换登录器",
     "connect.action.forget.title": "退回登录壳；不删除本地数据",
@@ -665,7 +665,7 @@ export const messages: Messages = {
     "header.language.aria": "言語を選択",
     // ----- Connect status -----
     "connect.state.idle": "未接続",
-    "connect.state.opening": "ポップアップを開いています…",
+    "connect.state.opening": "接続中…",
     "connect.state.connected": "準備完了",
     "connect.state.disconnected": "切断済み",
     "connect.row.pageOrigin": "page origin",
@@ -678,7 +678,7 @@ export const messages: Messages = {
     "connect.action.login": "再ログイン",
     "connect.action.login.title":
       "connect.login を最初からやり直します。現在の resume 試行は破棄されます。",
-    "connect.action.resume": "session を再開",
+    "connect.action.resume": "再接続",
     "connect.action.resume.title":
       "ポップアップを開き直し、保存済み sessionId で connect.resume を呼びます",
     "connect.action.forget": "ID を切り替える / プロバイダを変更",
