@@ -10,7 +10,7 @@
 
 import type { Block, BlockNoteEditor, PartialBlock } from "@blocknote/core";
 import { useBlockNoteEditor, useEditorState } from "@blocknote/react";
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import { useI18n } from "../i18n/useI18n";
 import type { MessageKey } from "../i18n/types";
 
@@ -107,6 +107,8 @@ const INLINE_STYLE_ACTIONS = [
   { key: "code", labelKey: "editor.toolbar.inline.code" }
 ] as const;
 
+type ToolbarIconKey = BlockAction["key"] | (typeof INLINE_STYLE_ACTIONS)[number]["key"];
+
 /** 固定格式工具栏；只反映当前 editor 真值，不持有独立状态。 */
 export function EditorFormattingToolbar(props: EditorFormattingToolbarProps) {
   const { t } = useI18n();
@@ -148,6 +150,7 @@ export function EditorFormattingToolbar(props: EditorFormattingToolbarProps) {
             active={action.active}
             disabled={props.disabled}
             label={t(action.labelKey)}
+            icon={renderToolbarIcon(action.key)}
             onClick={() => {
               action.run(editor, toolbarState.blocks as ToolbarBlock[]);
             }}
@@ -162,6 +165,7 @@ export function EditorFormattingToolbar(props: EditorFormattingToolbarProps) {
             active={action.key in toolbarState.activeStyles}
             disabled={props.disabled || !supportsInlineStyle(editor, action.key)}
             label={t(action.labelKey)}
+            icon={renderToolbarIcon(action.key)}
             onClick={() => {
               editor.focus();
               editor.toggleStyles({ [action.key]: true } as never);
@@ -176,6 +180,7 @@ export function EditorFormattingToolbar(props: EditorFormattingToolbarProps) {
 function ToolbarButton(props: {
   active: boolean;
   disabled: boolean;
+  icon: ReactNode;
   label: string;
   onClick: () => void;
 }) {
@@ -184,15 +189,114 @@ function ToolbarButton(props: {
       type="button"
       className={`editor-format-toolbar__button${props.active ? " is-active" : ""}`}
       aria-pressed={props.active}
+      aria-label={props.label}
       disabled={props.disabled}
+      title={props.label}
       onMouseDown={(event) => {
         // 保留当前文本选区；否则点击按钮会先让编辑器失焦，格式操作会打在错误位置。
         event.preventDefault();
       }}
       onClick={props.onClick}
     >
-      {props.label}
+      {props.icon}
     </button>
+  );
+}
+
+/**
+ * 工具栏图标内嵌在代码里，避免额外引入图标依赖，同时确保 light / dark theme 都走
+ * `currentColor`，由现有主题 token 控制明暗。
+ */
+function renderToolbarIcon(key: ToolbarIconKey): ReactNode {
+  switch (key) {
+    case "paragraph":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M4 5.5h12M4 10h12M4 14.5h8.5" />
+        </svg>
+      );
+    case "heading1":
+      return <TextIcon text="H1" />;
+    case "heading2":
+      return <TextIcon text="H2" />;
+    case "heading3":
+      return <TextIcon text="H3" />;
+    case "quote":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M6.5 7.25H4.75v2.5A2.75 2.75 0 0 0 7.5 12.5v.25A2.75 2.75 0 0 1 4.75 15.5M13.75 7.25H12v2.5a2.75 2.75 0 0 0 2.75 2.75v.25A2.75 2.75 0 0 1 12 15.5" />
+        </svg>
+      );
+    case "bulletList":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="4.5" cy="5.5" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="4.5" cy="10" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="4.5" cy="14.5" r="1.1" fill="currentColor" stroke="none" />
+          <path d="M8 5.5h8M8 10h8M8 14.5h8" />
+        </svg>
+      );
+    case "numberedList":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <text x="4.5" y="7.1" textAnchor="middle" className="editor-format-toolbar__icon-text editor-format-toolbar__icon-text--small">
+            1
+          </text>
+          <text x="4.5" y="14.6" textAnchor="middle" className="editor-format-toolbar__icon-text editor-format-toolbar__icon-text--small">
+            2
+          </text>
+          <path d="M8 5.5h8M8 10h8M8 14.5h8" />
+        </svg>
+      );
+    case "checkList":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <rect x="2.75" y="4" width="3.5" height="3.5" rx="0.7" />
+          <path d="M3.7 5.9 4.7 6.9 6 5.2M8.5 5.75H17M2.75 12.25h3.5v3.5h-3.5zM3.7 14.1l1 1 1.3-1.7M8.5 14H17" />
+        </svg>
+      );
+    case "codeBlock":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m7 5.5-3 4.5 3 4.5M13 5.5l3 4.5-3 4.5M10.75 4.75 9 15.25" />
+        </svg>
+      );
+    case "divider":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M3 10h14" />
+          <circle cx="10" cy="10" r="1.25" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "bold":
+      return <TextIcon text="B" weight={800} />;
+    case "italic":
+      return <TextIcon text="I" italic />;
+    case "code":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m8 6-4 4 4 4M12 6l4 4-4 4" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+function TextIcon(props: { text: string; weight?: number; italic?: boolean }) {
+  return (
+    <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+      <text
+        x="10"
+        y="13"
+        textAnchor="middle"
+        className="editor-format-toolbar__icon-text"
+        fontWeight={props.weight ?? 700}
+        fontStyle={props.italic ? "italic" : "normal"}
+      >
+        {props.text}
+      </text>
+    </svg>
   );
 }
 
