@@ -176,6 +176,8 @@ export type MessageKey =
   | "editor.decryptFailed.reason"
   | "editor.decryptFailed.note"
   // ----- Document panel: editor loading -----
+  | "editor.loading.title"
+  | "editor.loading.hint"
   | "editor.loading.placeholder"
   // ----- Tag input -----
   | "tag.placeholder"

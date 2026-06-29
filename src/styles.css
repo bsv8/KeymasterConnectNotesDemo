@@ -1249,6 +1249,16 @@ code {
   text-shadow: 3px 3px 0 rgba(255, 255, 255, 0.18);
 }
 
+.editor-loading__hint {
+  display: block;
+  max-width: 28em;
+  color: rgba(16, 16, 16, 0.82);
+  font-size: clamp(14px, 2vw, 22px);
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.06em;
+}
+
 @keyframes editor-loading-sign-pulse {
   0%,
   100% {

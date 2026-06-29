@@ -184,6 +184,8 @@ export const messages: Messages = {
     "editor.decryptFailed.note":
       "The note is still here; metadata is visible but the body cannot be edited.",
     // ----- Document panel: editor loading -----
+    "editor.loading.title": "Confirm decryption",
+    "editor.loading.hint": "Go to Keymaster and approve this decrypt request.",
     "editor.loading.placeholder": "(Decrypting...)",
     // ----- Tag input -----
     "tag.placeholder": "Type a tag, press Enter to commit",
@@ -483,6 +485,8 @@ export const messages: Messages = {
     "editor.decryptFailed.note":
       "note 仍然保留；可查看元数据但无法编辑正文。",
     // ----- Document panel: editor loading -----
+    "editor.loading.title": "请确认解密",
+    "editor.loading.hint": "请前往 Keymaster 完成这次解密确认。",
     "editor.loading.placeholder": "（解密中...）",
     // ----- Tag input -----
     "tag.placeholder": "输入 tag，回车提交",
@@ -775,6 +779,8 @@ export const messages: Messages = {
     "editor.decryptFailed.note":
       "note 自体は残っています。メタデータは確認できますが本文は編集できません。",
     // ----- Document panel: editor loading -----
+    "editor.loading.title": "復号を確認してください",
+    "editor.loading.hint": "Keymaster でこの復号リクエストを承認してください。",
     "editor.loading.placeholder": "（復号中...）",
     // ----- Tag input -----
     "tag.placeholder": "tag を入力、Enter で確定",

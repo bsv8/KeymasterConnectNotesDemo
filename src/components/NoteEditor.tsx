@@ -74,11 +74,12 @@ export function NoteEditor(props: NoteEditorProps) {
 
   if (props.loading) {
     return (
-      <div className="editor editor-loading" role="status" aria-live="polite" aria-label={t("editor.loading.placeholder")}>
+      <div className="editor editor-loading" role="status" aria-live="polite" aria-label={t("editor.loading.title")}>
         <div className="editor-loading__site">
           <div className="editor-loading__sign">
             <span className="editor-loading__eyebrow">Keymaster Connect</span>
-            <strong className="editor-loading__title">{t("editor.loading.placeholder")}</strong>
+            <strong className="editor-loading__title">{t("editor.loading.title")}</strong>
+            <span className="editor-loading__hint">{t("editor.loading.hint")}</span>
           </div>
         </div>
       </div>
