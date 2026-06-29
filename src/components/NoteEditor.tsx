@@ -80,6 +80,7 @@ export function NoteEditor(props: NoteEditorProps) {
             <span className="editor-loading__eyebrow">Keymaster Connect</span>
             <strong className="editor-loading__title">{t("editor.loading.title")}</strong>
             <span className="editor-loading__hint">{t("editor.loading.hint")}</span>
+            <span className="editor-loading__note">{t("editor.loading.note")}</span>
           </div>
         </div>
       </div>

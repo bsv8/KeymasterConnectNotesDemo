@@ -178,6 +178,7 @@ export type MessageKey =
   // ----- Document panel: editor loading -----
   | "editor.loading.title"
   | "editor.loading.hint"
+  | "editor.loading.note"
   | "editor.loading.placeholder"
   // ----- Tag input -----
   | "tag.placeholder"

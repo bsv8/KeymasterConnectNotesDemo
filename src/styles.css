@@ -1259,6 +1259,16 @@ code {
   letter-spacing: 0.06em;
 }
 
+.editor-loading__note {
+  display: block;
+  max-width: 34em;
+  color: rgba(16, 16, 16, 0.72);
+  font-size: clamp(12px, 1.5vw, 16px);
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0.03em;
+}
+
 @keyframes editor-loading-sign-pulse {
   0%,
   100% {
