@@ -2482,13 +2482,6 @@ export default function App() {
                   }
                   spellCheck={false}
                 />
-                <span className="document-head__hint">
-                  {currentEditorState.kind === "new"
-                    ? t("note.head.hint.new")
-                    : currentEditorState.loading
-                      ? t("note.head.hint.loading")
-                      : t("note.head.hint.persisted")}
-                </span>
               </div>
               <div className="document-editor">
                 <NoteEditor
