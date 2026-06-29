@@ -2233,8 +2233,9 @@ code {
 
   .workspace {
     --mobile-editor-min-height: 340px;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(var(--mobile-editor-min-height), 1fr);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   /*
@@ -2245,9 +2246,9 @@ code {
    *  - 切换由 App.tsx 的 `isSidebarOpenOnMobile` 控制。
    */
   .workspace .sidebar {
-    grid-column: 1 / -1;
     border-right: none;
     border-bottom: 1px solid var(--color-border);
+    flex: 0 0 auto;
     max-height: none;
   }
 
@@ -2260,6 +2261,7 @@ code {
   }
 
   .document-panel {
+    flex: 1 1 auto;
     min-height: var(--mobile-editor-min-height);
     padding-bottom: 0;
   }
