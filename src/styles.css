@@ -1071,7 +1071,7 @@ code {
   min-width: 0;
   min-height: 0;
   background: var(--color-bg);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .document-panel__empty {
@@ -1280,6 +1280,7 @@ code {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .editor {
@@ -1464,6 +1465,7 @@ code {
 .editor-scroll {
   flex: 1 1 auto;
   min-height: 0;
+  position: relative;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -2230,7 +2232,9 @@ code {
   }
 
   .workspace {
+    --mobile-editor-min-height: 340px;
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(var(--mobile-editor-min-height), 1fr);
   }
 
   /*
@@ -2247,11 +2251,16 @@ code {
     max-height: none;
   }
 
+  .workspace.is-sidebar-open .sidebar {
+    max-height: max(0px, calc(100% - var(--mobile-editor-min-height)));
+  }
+
   .workspace.is-sidebar-collapsed .sidebar {
     display: none;
   }
 
   .document-panel {
+    min-height: var(--mobile-editor-min-height);
     padding-bottom: 0;
   }
 

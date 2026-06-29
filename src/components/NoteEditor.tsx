@@ -17,7 +17,7 @@
 //     这避免"save 成功后 App 重新传入相同 markdown → 触发 reload → 编辑器抖动"链路。
 //     上抛的 onChange 也会先把 `md` 写入 `lastLoadedRef`，让"自己刚上抛的"不会再被自己 reload。
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BlockNoteView } from "@blocknote/mantine";
 import { BlockNoteViewEditor, useCreateBlockNote } from "@blocknote/react";
 import type { BlockNoteEditor } from "@blocknote/core";
@@ -41,6 +41,7 @@ export function NoteEditor(props: NoteEditorProps) {
     // 走 markdown 导入/导出为单真值；不上传 JSON。
     initialContent: [{ type: "paragraph", content: [] }]
   });
+  const [editorPortalRoot, setEditorPortalRoot] = useState<HTMLDivElement | null>(null);
 
   // 记录上一次外部传入的 markdown，避免重复解析产生抖动。
   const lastLoadedRef = useRef<string | null>(null);
@@ -107,13 +108,26 @@ export function NoteEditor(props: NoteEditorProps) {
         editor={editor}
         editable={props.editable}
         formattingToolbar={false}
+        portalElements={
+          editorPortalRoot
+            ? {
+                sideMenu: editorPortalRoot,
+                slashMenu: editorPortalRoot,
+                linkToolbar: editorPortalRoot,
+                emojiPicker: editorPortalRoot,
+                filePanel: editorPortalRoot,
+                tableHandles: editorPortalRoot,
+                comments: editorPortalRoot
+              }
+            : undefined
+        }
         renderEditor={false}
         // 默认 slash menu 列表满足 markdown 友好块；不引入 image / table 等。
         slashMenu
         theme={props.theme}
       >
         <EditorFormattingToolbar disabled={!props.editable} />
-        <div className="editor-scroll">
+        <div className="editor-scroll" ref={setEditorPortalRoot}>
           <BlockNoteViewEditor />
         </div>
       </BlockNoteView>
