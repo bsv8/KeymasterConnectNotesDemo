@@ -1133,13 +1133,8 @@ code {
 
 .document-toolbar__row--tags {
   align-items: flex-start;
-  border-bottom: 1px solid var(--color-border);
   padding-top: 4px;
-  padding-bottom: 8px;
-}
-
-.document-toolbar__row--actions {
-  justify-content: space-between;
+  padding-bottom: 4px;
 }
 
 .document-toolbar__tags {
@@ -1152,53 +1147,6 @@ code {
   font-size: 11.5px;
   color: var(--color-text-muted);
   white-space: nowrap;
-}
-
-.document-toolbar__meta {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  align-items: center;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.document-toolbar__meta li {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 11.5px;
-  min-width: 0;
-}
-
-.document-toolbar__meta li span {
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
-  white-space: nowrap;
-}
-
-.document-toolbar__meta li strong {
-  font-weight: 500;
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-.document-toolbar__meta li.is-warning strong,
-.document-toolbar__meta li.is-warning span {
-  color: var(--color-warning);
-}
-
-.document-toolbar__actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
 }
 
 .document-toolbar__error {
@@ -1541,10 +1489,34 @@ code {
   color: var(--color-text);
 }
 
+.editor-format-toolbar__button.is-primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.editor-format-toolbar__button.is-primary:hover:not(:disabled) {
+  border-color: #1c6dc7;
+  background: #1c6dc7;
+  color: #ffffff;
+}
+
+.editor-format-toolbar__button.is-primary.is-active {
+  border-color: #1c6dc7;
+  background: #1c6dc7;
+  color: #ffffff;
+}
+
 .editor-format-toolbar__button:disabled {
   cursor: not-allowed;
   color: var(--color-text-muted);
   opacity: 1;
+}
+
+.editor-format-toolbar__button.is-primary:disabled {
+  border-color: var(--color-border-strong);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
 }
 
 .editor-format-toolbar::-webkit-scrollbar {

@@ -190,9 +190,9 @@ export function NotesSidebar(props: NotesSidebarProps) {
             eyebrow: t("sidebar.toolbar.eyebrow.note"),
             title: currentNote.title || t("sidebar.toolbar.title.fallbackNote"),
             meta: t("sidebar.toolbar.meta.updated", { time: new Date(currentNote.updatedAt).toLocaleString(language) }),
-            actionLabel: t("sidebar.toolbar.action.noteStatic"),
-            actionDisabled: true,
-            onAction: undefined
+            actionLabel: t("sidebar.toolbar.action.deleteNote"),
+            actionDisabled: !!props.disabled,
+            onAction: () => props.onNoteAction({ type: "delete", noteId: currentNote.id })
           }
         : props.selection.kind === "note"
           ? {

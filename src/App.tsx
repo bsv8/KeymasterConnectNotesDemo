@@ -2152,6 +2152,26 @@ export default function App() {
   const isBlockingSave = saveOverlay !== null;
 
   /**
+   * 保存按钮的统一亮灭规则。
+   * 设计缘由：保存入口已迁到正文工具栏，但可保存判定必须继续和原先完全一致。
+   */
+  const canSaveCurrentNote =
+    !!currentEditorState &&
+    !!session &&
+    authFlow === null &&
+    !currentEditorState.decryptFailed &&
+    !currentEditorState.loading &&
+    !isBlockingSave &&
+    !titleError &&
+    dirty;
+
+  const saveButtonTitle = isBlockingSave
+    ? t("toolbar.action.save.title.waiting")
+    : currentEditorState?.decryptFailed
+      ? t("toolbar.action.save.title.decryptFailed")
+      : undefined;
+
+  /**
    * banner 优先级判定：
    *   1. 错误（lastError）—— 最高
    *   2. 解密失败（decryptError + 当前 note 处于 decryptFailed）
@@ -2432,10 +2452,6 @@ export default function App() {
             <>
               <DocumentToolbar
                 draft={editorStateToDraft(currentEditorState)}
-                record={currentNoteRecord}
-                decryptFailed={currentEditorState.decryptFailed}
-                isDirty={dirty}
-                isSaving={isBlockingSave}
                 titleError={titleError}
                 canEdit={
                   !!session &&
@@ -2444,13 +2460,9 @@ export default function App() {
                   !currentEditorState.loading &&
                   !isBlockingSave
                 }
-                canDelete={!!session && authFlow === null && !isBlockingSave}
                 onChangeTags={(tags) =>
                   setCurrentEditorState((prev) => (prev ? { ...prev, tags } : prev))
                 }
-                onSave={() => void handleSave()}
-                onDelete={() => handleDeleteNote(currentEditorState!.noteId)}
-                onReset={handleReset}
               />
               <div className="document-head">
                 <input
@@ -2483,6 +2495,8 @@ export default function App() {
                   key={currentEditorState.noteId}
                   markdown={editorMarkdown}
                   editable={editorEditable && !isBlockingSave}
+                  saveDisabled={!canSaveCurrentNote}
+                  saveTitle={saveButtonTitle}
                   loading={currentEditorState.loading}
                   decryptFailed={currentEditorState.decryptFailed}
                   theme={resolvedTheme}
@@ -2491,6 +2505,7 @@ export default function App() {
                       prev ? { ...prev, markdown: md } : prev
                     )
                   }
+                  onSave={() => void handleSave()}
                 />
               </div>
             </>

@@ -28,10 +28,13 @@ import { EditorFormattingToolbar } from "./EditorFormattingToolbar";
 export interface NoteEditorProps {
   markdown: string;
   editable: boolean;
+  saveDisabled: boolean;
+  saveTitle?: string;
   loading: boolean;
   decryptFailed: boolean;
   theme: "light" | "dark";
   onChange: (markdown: string) => void;
+  onSave: () => void;
 }
 
 /** 用 `tryParseMarkdownToBlocks` 初始化文档；后续转换统一走 markdown。 */
@@ -126,7 +129,12 @@ export function NoteEditor(props: NoteEditorProps) {
         slashMenu
         theme={props.theme}
       >
-        <EditorFormattingToolbar disabled={!props.editable} />
+        <EditorFormattingToolbar
+          disabled={!props.editable}
+          saveDisabled={props.saveDisabled}
+          saveTitle={props.saveTitle}
+          onSave={props.onSave}
+        />
         <div className="editor-scroll" ref={setEditorPortalRoot}>
           <BlockNoteViewEditor />
         </div>

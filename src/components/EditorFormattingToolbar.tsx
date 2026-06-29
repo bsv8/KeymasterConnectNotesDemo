@@ -19,6 +19,9 @@ type ToolbarBlock = Block;
 
 interface EditorFormattingToolbarProps {
   disabled: boolean;
+  saveDisabled: boolean;
+  saveTitle?: string;
+  onSave: () => void;
 }
 
 interface BlockAction {
@@ -107,7 +110,7 @@ const INLINE_STYLE_ACTIONS = [
   { key: "code", labelKey: "editor.toolbar.inline.code" }
 ] as const;
 
-type ToolbarIconKey = BlockAction["key"] | (typeof INLINE_STYLE_ACTIONS)[number]["key"];
+type ToolbarIconKey = "save" | BlockAction["key"] | (typeof INLINE_STYLE_ACTIONS)[number]["key"];
 
 /** 固定格式工具栏；只反映当前 editor 真值，不持有独立状态。 */
 export function EditorFormattingToolbar(props: EditorFormattingToolbarProps) {
@@ -143,6 +146,18 @@ export function EditorFormattingToolbar(props: EditorFormattingToolbarProps) {
 
   return (
     <div className="editor-format-toolbar" role="toolbar" aria-label={t("editor.toolbar.aria")}>
+      <div className="editor-format-toolbar__group" aria-label={t("toolbar.action.save")}>
+        <ToolbarButton
+          active={false}
+          disabled={props.saveDisabled}
+          label={t("toolbar.action.save")}
+          icon={renderToolbarIcon("save")}
+          onClick={props.onSave}
+          variant="primary"
+          title={props.saveTitle ?? t("toolbar.action.save")}
+        />
+      </div>
+
       <div className="editor-format-toolbar__group" aria-label={t("editor.toolbar.group.block")}>
         {blockButtons.map((action) => (
           <ToolbarButton
@@ -183,15 +198,19 @@ function ToolbarButton(props: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  title?: string;
+  variant?: "default" | "primary";
 }) {
   return (
     <button
       type="button"
-      className={`editor-format-toolbar__button${props.active ? " is-active" : ""}`}
+      className={`editor-format-toolbar__button${props.active ? " is-active" : ""}${
+        props.variant === "primary" ? " is-primary" : ""
+      }`}
       aria-pressed={props.active}
       aria-label={props.label}
       disabled={props.disabled}
-      title={props.label}
+      title={props.title ?? props.label}
       onMouseDown={(event) => {
         // 保留当前文本选区；否则点击按钮会先让编辑器失焦，格式操作会打在错误位置。
         event.preventDefault();
@@ -209,6 +228,13 @@ function ToolbarButton(props: {
  */
 function renderToolbarIcon(key: ToolbarIconKey): ReactNode {
   switch (key) {
+    case "save":
+      return (
+        <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M5 3.5h8.5L16.5 6v10.5H3.5V3.5h1.5" />
+          <path d="M6.5 3.5v4h6v-4M7.5 16.5v-4h5v4" />
+        </svg>
+      );
     case "paragraph":
       return (
         <svg className="editor-format-toolbar__icon" viewBox="0 0 20 20" aria-hidden="true">

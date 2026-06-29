@@ -132,6 +132,7 @@ export type MessageKey =
   | "sidebar.toolbar.meta.unsaved"
   | "sidebar.toolbar.meta.root"
   | "sidebar.toolbar.action.deleteFolder"
+  | "sidebar.toolbar.action.deleteNote"
   | "sidebar.toolbar.action.noteStatic"
   | "sidebar.toolbar.action.rootStatic"
   | "sidebar.expand.expandFolder"
