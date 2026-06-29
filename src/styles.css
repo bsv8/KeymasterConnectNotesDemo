@@ -1428,10 +1428,11 @@ code {
   color: var(--color-text-soft);
 }
 
-/* BlockNote 的样式压平：把最大宽度限制、去掉默认强对比边框。 */
+/* BlockNote 的样式压平：正文容器跟随 document-panel 宽度，不再中间定宽。 */
 .editor .bn-container {
-  max-width: 760px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 .editor .bn-default-styles,
