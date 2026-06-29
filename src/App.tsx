@@ -365,7 +365,7 @@ export default function App() {
    * - 桌面端（>= MOBILE_BREAKPOINT）始终视为"展开"，但 state 仍为 null 时
    *   UI 也按"展开"处理；这避免桌面端误收起。
    * - 窄屏（< MOBILE_BREAKPOINT）默认收起；用户点"目录"按钮时展开；
-   *   选中 root / folder / note 后自动收起；用户可再次手动展开。
+   *   后续是否收起也只由用户手动控制。
    */
   const [isSidebarOpenOnMobile, setIsSidebarOpenOnMobile] = useState<boolean | null>(null);
 
@@ -503,8 +503,8 @@ export default function App() {
    * 设计缘由（施工单 2026-06-27 第 5.2 / 8.1 章）：
    *   - 桌面端"开合状态"不参与视觉收口，仅窄屏使用；
    *   - 在窄屏下：用户点目录按钮 = 展开；用户再点 = 收起；
-   *   - 在窄屏下：选中 root / folder / note = 自动收起；
-   *   - 用户后续可再次手工展开（不会被永远锁死）。
+   *   - 选中 root / folder / note **不**自动改写开合状态；
+   *   - 因此窄屏 sidebar 是否显示，始终由用户手工决定。
    */
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -912,7 +912,7 @@ export default function App() {
    *     直接 `applySelection`；
    *   - 若当前是 dirty（任何已落库 note 的修改，或新建 note 的存在）：
    *     弹"保存并切换"遮罩，**不**静默切走；
-   *   - 窄屏下：选中后调用 `autoCloseMobileSidebar()` 让文件树自动收起。
+   *   - 窄屏下切换文件时，sidebar 开合状态不自动改写，只由用户手动控制。
    *   - 若切换被"未保存拦截"阻断：保持文件树状态不变，让用户能在 sidebar
    *     里继续点其他项或继续编辑当前 note；**不**提前写 `expandedFolderIds`。
    *   - **同 note 重复点击**：视为 no-op，但若祖先 folder 处于折叠态，
@@ -932,22 +932,18 @@ export default function App() {
     }
     if (!current) {
       applySelection(next);
-      autoCloseMobileSidebar();
       return true;
     }
     if (current.decryptFailed) {
       // 解密失败态：当前没有"未保存修改"概念，直接允许切换。
       applySelection(next);
-      autoCloseMobileSidebar();
       return true;
     }
     if (!isDirty(current)) {
       applySelection(next);
-      autoCloseMobileSidebar();
       return true;
     }
     // dirty：弹"保存并切换"遮罩，保留当前 editorState。
-    // 阻断期间**不**自动收起 sidebar（让用户能继续点别的）；
     // 阻断期间**不**展开目标祖先路径（避免"树像切过去了，右边其实没切"）。
     setSaveOverlay({ mode: "save-and-switch", action: { kind: "switch", target: next } });
     return false;
@@ -1029,18 +1025,6 @@ export default function App() {
     //     旧 `currentEditorState` 也会被 `openPersistedNote` 覆盖。
     expandAncestorFolders(persisted.folderId);
     void openPersistedNote(persisted);
-  }
-
-  /**
-   * 窄屏下选中后自动收起 sidebar。
-   * 设计缘由（施工单 2026-06-27 第 5.2 / 5.3 / 6.8 章）：
-   *   - 只在窄屏生效（桌面端 isSidebarOpenOnMobile === true，不改）；
-   *   - 选中后不强制锁死，用户可再次手动展开。
-   */
-  function autoCloseMobileSidebar() {
-    if (typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT) {
-      setIsSidebarOpenOnMobile(false);
-    }
   }
 
   /* ============== 解密 / 装载 baseline ============== */
@@ -1763,12 +1747,10 @@ export default function App() {
   function completeSaveFlow(action: AfterSaveAction) {
     if (action.kind === "switch") {
       applySelection(action.target);
-      autoCloseMobileSidebar();
       return;
     }
     if (action.kind === "create-note") {
       doCreateNote(action.parentId);
-      autoCloseMobileSidebar();
       return;
     }
   }
