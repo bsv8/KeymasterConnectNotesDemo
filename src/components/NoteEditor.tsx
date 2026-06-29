@@ -113,7 +113,9 @@ export function NoteEditor(props: NoteEditorProps) {
         theme={props.theme}
       >
         <EditorFormattingToolbar disabled={!props.editable} />
-        <BlockNoteViewEditor />
+        <div className="editor-scroll">
+          <BlockNoteViewEditor />
+        </div>
       </BlockNoteView>
     </div>
   );
