@@ -1054,8 +1054,18 @@ code {
  * - 窄屏下：document-toolbar 允许换行；title 保持可读。
  */
 .document-panel {
-  --document-content-inline-start: 8px;
+  /*
+   * 文档区左轴线分两层：
+   * - `text-inline-start`：正文文字真正起笔的位置；
+   * - `surface-inline-start`：把 BlockNote 左侧浮动 `+ / 拖拽` 也算进去后的
+   *   外边界位置。title / toolbar 应看齐这一层，而不是只盯正文文字。
+   */
+  --document-text-inline-start: 32px;
   --document-content-inline-end: 32px;
+  --document-side-menu-footprint: 48px;
+  --document-surface-inline-start: calc(
+    var(--document-text-inline-start) - var(--document-side-menu-footprint)
+  );
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1105,8 +1115,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 0;
-  margin: 12px var(--document-content-inline-end) 6px var(--document-content-inline-start);
-  padding: 8px 14px;
+  margin: 12px var(--document-content-inline-end) 6px var(--document-surface-inline-start);
+  padding: 8px 14px 8px var(--document-side-menu-footprint);
   background: var(--color-bg-soft);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -1210,7 +1220,7 @@ code {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 4px var(--document-content-inline-end) 6px var(--document-content-inline-start);
+  padding: 4px var(--document-content-inline-end) 6px var(--document-surface-inline-start);
   flex-wrap: wrap;
   flex: 0 0 auto;
 }
@@ -1225,7 +1235,7 @@ code {
   line-height: 1.25;
   font-weight: 700;
   color: var(--color-text);
-  padding: 4px 8px;
+  padding: 4px 8px 4px var(--document-side-menu-footprint);
   border-radius: var(--radius-md);
   outline: none;
   letter-spacing: -0.01em;
@@ -1276,7 +1286,7 @@ code {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px var(--document-content-inline-end) 64px var(--document-content-inline-start);
+  padding: 4px var(--document-content-inline-end) 64px var(--document-text-inline-start);
 }
 
 .editor-loading {
@@ -2197,7 +2207,7 @@ code {
   }
 
   .document-head {
-    padding: 4px var(--document-content-inline-end) 6px var(--document-content-inline-start);
+    padding: 4px var(--document-content-inline-end) 6px var(--document-surface-inline-start);
   }
 
   .document-head__title {
@@ -2205,12 +2215,13 @@ code {
   }
 
   .document-panel {
-    --document-content-inline-start: 8px;
+    --document-text-inline-start: 16px;
     --document-content-inline-end: 16px;
+    --document-side-menu-footprint: 24px;
   }
 
   .editor {
-    padding: 4px var(--document-content-inline-end) 48px var(--document-content-inline-start);
+    padding: 4px var(--document-content-inline-end) 48px var(--document-text-inline-start);
   }
 
   .editor-format-toolbar {
