@@ -59,10 +59,37 @@
   - `"resume"`：有本地 session，正在自动 / 手动 resume，提示用户等待；
   - `"resumeFailed"`：resume 失败 / 跨 origin / 本地记录损坏，显示"会话已失效，
     请重新登录"。
-- 有本地 session 且 targetOrigin 一致时，提供"恢复 session" + "忘掉当前 session"两个入口。
-- 大号登录按钮 + 最近错误展示。
+- 主按钮文案由"是否存在本地 session"决定（**不**由 `mode` 决定）：
+  - 无本地 session → `登录`；
+  - 有本地 session → `重新登录`。
+- 有本地 session 且 targetOrigin 一致时，额外提供"恢复 session"入口；
+  **不**再展示"忘掉当前 session"按钮（施工单 2026-06-28 003）：
+  想换 key / 换 provider / 放弃当前本地 session 的用户，直接点"重新登录"。
+- 大号主按钮 + 最近错误展示。
 
 明确不展示任何 owner 数据摘要、文件树预览、最近登录记录。
+
+#### 锁屏页 popup_closed 语义（硬切换硬约束）
+
+- 锁屏页的 `popup_closed` **不**算用户可见错误：
+  - 真实发生场景：用户手动关闭 popup / popup 在锁屏 / 用户这次不想继续；
+  - 锁屏页**不**展示"popup 在协议完成前被关闭"横幅；
+  - 锁屏页**不**清本地 session；
+  - 用户下次再点主按钮时重新开 popup。
+- 真实 `popup_blocked`（`window.open(...) === null`）仍必须展示给用户。
+- transport 层对 `popup_blocked` / `popup_closed` 的判定**不**被改坏：
+  - `popup_blocked` = `window.open(...)` 返回 `null`；
+  - `popup_closed` = popup 曾经存在，但在协议完成前被关闭、刷新或失联。
+- 收口只发生在 App 层的锁屏态 login / resume 流程；**不**下沉到 transport。
+
+#### 重新登录 ≠ 先忘掉再登录
+
+- 点击"重新登录"**不**预先调用 `clearConnectSession()`；
+- 直接发起一次新的 `connect.login`：
+  - 成功：用新 session 覆盖旧 session；
+  - 失败：旧 session 不动，锁屏页仍可继续显示"恢复 session"。
+- "重新登录"也**不**复用旧 sessionId 偷偷走 `connect.resume`——这是与"恢复 session"
+  的明确边界。
 
 ### Notes 工作区
 

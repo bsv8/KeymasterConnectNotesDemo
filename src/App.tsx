@@ -9,7 +9,9 @@
 //          施工单 2026-06-27 note-search-results-and-tree-expand-persistence
 //          第 4-11 章 +
 //          施工单 2026-06-28 001 connect-session-bound-key-integration
-//          硬切换第 1-9 章）：
+//          硬切换第 1-9 章 +
+//          施工单 2026-06-28 003 lock-screen-popup-close-and-relogin
+//          硬切换第 4.2 / 4.3 / 5.1 / 5.2 章）：
 //   - 顶层固定两态：`session === null` 时只渲染 `LockScreen`；已认证才渲染工作区。
 //   - **connect session 状态机**（施工单 2026-06-28 001 第 4.1 / 8.3 章）：
 //       - 登录真值 = `connectSessionId`；
@@ -30,6 +32,19 @@
 //   - **不再**把 `identity.get` 当登录入口真值；本 demo 只发 `connect.login`
 //     / `connect.resume` / `connect.logout`。
 //   - `cipher.*` 请求**必须**带 `connectSessionId`；**不**读全局 active key。
+//   - **锁屏页 popup_closed 收口**（施工单 2026-06-28 003 第 4.2 / 5.1 / 5.2 章）：
+//       - `popup_closed` 在**锁屏态**的 login / resume 流程里**不**展示为用户可见
+//         错误，**不**清本地 session；停留在锁屏页；用户下次再点主按钮时重新
+//         开 popup。
+//       - 真实 `popup_blocked`（`window.open(...) === null`）仍走现有错误映射，
+//         不能为了压掉 `popup_closed` 噪音把 transport 真值一起吞掉。
+//   - **重新登录不预清本地 session**（施工单 2026-06-28 003 第 4.3 / 5.4 章）：
+//       - 点击"重新登录"保留本地 session 记录，直接发起一次新 `connect.login`；
+//       - 成功：用新 session 覆盖旧 session；
+//       - 失败：旧 session 不动，锁屏页仍可继续显示"恢复 session"。
+//       - **不**调 `clearConnectSession()`，**不**复用旧 sessionId。
+//   - 锁屏页**不再**展示"忘掉当前 session"按钮（施工单 2026-06-28 003
+//     第 4.5 / 5.6 章）。
 //   - 旧章节里针对 `identity.get` / owner 快照 / pendingDrafts / decryptedCache
 //     / selection hydration 等行为全部保留，仅把 owner 真值从 `identity.get`
 //     替换为 `connectSession.ownerPublicKeyHex`。
@@ -688,6 +703,13 @@ export default function App() {
       });
       setPopupState("connected");
     } catch (err) {
+      // 施工单 2026-06-28 003 第 4.2 / 5.1 章：锁屏态 login 流程里
+      // `popup_closed` 只代表"这次尝试结束了"，不当作锁屏页错误展示。
+      // 注意：不调用 `clearConnectSession()`——首次登录本来就没有本地 session。
+      if (shouldSilenceErrorOnLockScreen(err)) {
+        setLastError(null);
+        return;
+      }
       setLastError(formatTransportError(err, t));
     } finally {
       setAuthFlow(null);
@@ -789,6 +811,13 @@ export default function App() {
       setPopupState("connected");
       setResumeFailed(false);
     } catch (err) {
+      // 施工单 2026-06-28 003 第 4.2 / 5.2 章：锁屏态 resume 流程里
+      // `popup_closed` 只代表"这次尝试结束了"——保留"恢复 session"按钮，
+      // 让用户稍后重试或点"重新登录"。**不**清本地 session，**不**写 lastError。
+      if (shouldSilenceErrorOnLockScreen(err)) {
+        setLastError(null);
+        return;
+      }
       setLastError(formatTransportError(err, t));
     } finally {
       setAuthFlow(null);
@@ -2291,11 +2320,6 @@ export default function App() {
         onUseDefault={() => setTargetOrigin(DEFAULT_TARGET_ORIGIN)}
         onLogin={() => void handleLogin()}
         onResume={() => void handleResume()}
-        onForget={() => {
-          clearConnectSession();
-          setResumeFailed(false);
-          setLastError(null);
-        }}
       />
     );
   }
@@ -2683,6 +2707,24 @@ function formatTransportError(
   }
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);
+}
+
+/**
+ * 锁屏态 login / resume 流程里"是否应静默吞掉"的判定。
+ *
+ * 设计缘由（施工单 2026-06-28 003 第 4.2 / 5.1 / 5.2 章）：
+ *   - `popup_closed` 在锁屏态只代表"这次尝试结束了"——用户可能手动关 popup、
+ *     popup 锁屏、稍后再试；**不**自动算锁屏页错误；
+ *   - 真实 `popup_blocked`（浏览器未允许开窗）仍必须展示给用户；
+ *   - 其它 transport / protocol 错误在锁屏态仍按既有策略处理。
+ *
+ * 收口位置：
+ *   - 不放到 transport 层，避免污染底层真值；
+ *   - 不在 LockScreen 组件里判，避免把业务错误映射漏到 UI 层；
+ *   - 仅服务锁屏态 `handleLogin` / `performResume` 这两个流程，不扩展成通用 transport 框架。
+ */
+function shouldSilenceErrorOnLockScreen(error: unknown): boolean {
+  return error instanceof ProtocolTransportError && error.code === "popup_closed";
 }
 
 /**

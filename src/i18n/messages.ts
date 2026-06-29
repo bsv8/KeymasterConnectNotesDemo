@@ -52,11 +52,10 @@ export const messages: Messages = {
     "lock.action.login": "Sign in",
     "lock.action.login.submitTitle": "Please enter a target origin / URL",
     "lock.action.login.opening": "Opening popup...",
+    "lock.action.relogin": "Sign in again",
+    "lock.action.relogin.opening": "Opening popup...",
     "lock.action.resume": "Resume session",
     "lock.action.resume.opening": "Resuming session...",
-    "lock.action.forget": "Forget current session",
-    "lock.action.forget.title":
-      "Forget the current connect session on this device and return to the sign-in shell",
     "lock.status.resuming": "Resuming session...",
     "lock.status.resuming.description":
       "A previously authorized connect session is being restored. You may be asked to unlock the popup.",
@@ -355,10 +354,10 @@ export const messages: Messages = {
     "lock.action.login": "登录",
     "lock.action.login.submitTitle": "请输入 target origin / URL",
     "lock.action.login.opening": "拉起 popup...",
+    "lock.action.relogin": "重新登录",
+    "lock.action.relogin.opening": "拉起 popup...",
     "lock.action.resume": "恢复 session",
     "lock.action.resume.opening": "正在恢复 session...",
-    "lock.action.forget": "忘掉当前 session",
-    "lock.action.forget.title": "忘掉本机保存的 connect session，回到登录页",
     "lock.status.resuming": "正在恢复 session...",
     "lock.status.resuming.description":
       "正在恢复已授权的 connect session；popup 可能要求输入密码解锁。",
@@ -639,11 +638,10 @@ export const messages: Messages = {
     "lock.action.login.submitTitle":
       "target origin / URL を入力してください",
     "lock.action.login.opening": "ポップアップを開いています...",
+    "lock.action.relogin": "再ログイン",
+    "lock.action.relogin.opening": "ポップアップを開いています...",
     "lock.action.resume": "session を再開",
     "lock.action.resume.opening": "session を再開しています...",
-    "lock.action.forget": "現在の session を破棄",
-    "lock.action.forget.title":
-      "この端末に保存された connect session を破棄し、サインイン画面に戻ります",
     "lock.status.resuming": "session を再開しています...",
     "lock.status.resuming.description":
       "認可済みの connect session を復元中です。ポップアップでパスワード入力が必要になることがあります。",

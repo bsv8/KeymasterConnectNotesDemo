@@ -4,18 +4,27 @@
 // 设计缘由（施工单 2026-06-26 lock-screen-custom-provider 第 3-7 章 +
 //          施工单 2026-06-27 005-i18n-header-language-switch 8.8 章 +
 //          施工单 2026-06-28 001 connect-session-bound-key-integration
-//          硬切换第 4.3 / 8.5 章）：
+//          硬切换第 4.3 / 8.5 章 +
+//          施工单 2026-06-28 003 lock-screen-popup-close-and-relogin
+//          硬切换第 4-5 章）：
 //   - LockScreen 只在 `session === null` 时显示。
 //   - 职责：产品介绍 + 协议能力说明 + target origin 输入 + 默认地址快捷入口 +
-//     登录按钮 + 最近错误 + **resume 状态 + 恢复失败提示**。
+//     主按钮（登录 / 重新登录）+ 最近错误 + **resume 状态 + 恢复失败提示**。
 //   - 明确不承载 notes 数据、不显示文件树预览、不显示最近 owner 摘要。
 //   - 用户输入可以是完整 URL 或 origin 字符串；最终系统只取 `URL().origin`。
 //   - 非法 URL / origin 直接阻断，不自动修正、不 fallback 默认值。
 //   - 所有用户可见文案走 i18n 字典；不直接写中文/英文/日文。
-//   - **新**：mode 区分三种语义：
+//   - mode 区分三种语义：
 //       - `"login"`        —— 没有本地 session，显示真正的登录入口；
 //       - `"resume"`       —— 有本地 session、正在 resume（popup 可能要求解锁）；
 //       - `"resumeFailed"` —— resume 失败 / 跨 origin / 记录损坏，提示重新登录。
+//   - 主按钮文案**不**由 mode 决定，而是由"是否存在本地 session"决定：
+//       - 无本地 session → 登录；
+//       - 有本地 session → 重新登录；
+//     想换 key / 换 provider / 放弃当前本地 session 的用户直接点"重新登录"。
+//   - 锁屏页**不再**展示"忘掉当前 session"按钮（施工单 2026-06-28 003）。
+//   - 锁屏页里的 `popup_closed` **不**展示成错误横幅（施工单 2026-06-28 003
+//     第 4.2 / 5.1 / 5.2 章）；transport 真实 `popup_blocked` 仍正常暴露。
 
 import { useEffect, useMemo, useState } from "react";
 import { normalizeOrigin } from "../lib/connectClient";
@@ -64,15 +73,10 @@ export interface LockScreenProps {
   onTargetInputChange: (value: string) => void;
   /** 点击"使用默认地址"。 */
   onUseDefault: () => void;
-  /** 点击登录按钮（首次登录入口）。 */
+  /** 点击登录按钮（首次登录或重新登录入口）。 */
   onLogin: () => void;
   /** 点击"恢复 session"按钮。 */
   onResume: () => void;
-  /**
-   * 点击"忘掉当前 session"按钮：清本地 session，回真正登录入口。
-   * 仅在有 storedSession 时显示。
-   */
-  onForget: () => void;
 }
 
 /**
@@ -119,13 +123,24 @@ export function LockScreen(props: LockScreenProps) {
     props.onResume();
   };
 
-  const handleForget = () => {
-    if (props.isLoggingIn) return;
-    props.onForget();
-  };
-
   const showResumeEntry =
     props.storedSession !== null && props.mode !== "resumeFailed" && normalized === props.storedSession.targetOrigin;
+
+  /**
+   * 主按钮文案的真值（施工单 2026-06-28 003）：
+   *   - 无本地 session → 登录；
+   *   - 有本地 session → 重新登录；
+   * 不由 `mode` 决定；由"是否存在 storedSession"决定。
+   */
+  const isReloginEntry = props.storedSession !== null;
+  const mainButtonLabelKey =
+    props.isLoggingIn && props.mode !== "resume"
+      ? isReloginEntry
+        ? "lock.action.relogin.opening"
+        : "lock.action.login.opening"
+      : isReloginEntry
+        ? "lock.action.relogin"
+        : "lock.action.login";
 
   return (
     <div className="lock-screen">
@@ -219,9 +234,7 @@ export function LockScreen(props: LockScreenProps) {
               disabled={!canSubmit}
               title={!canSubmit && trimmed.length === 0 ? t("lock.action.login.submitTitle") : undefined}
             >
-              {props.isLoggingIn && props.mode !== "resume"
-                ? t("lock.action.login.opening")
-                : t("lock.action.login")}
+              {t(mainButtonLabelKey)}
             </button>
           </div>
         </form>
@@ -250,15 +263,6 @@ export function LockScreen(props: LockScreenProps) {
                 {props.isLoggingIn && props.mode === "resume"
                   ? t("lock.action.resume.opening")
                   : t("lock.action.resume")}
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={handleForget}
-                disabled={props.isLoggingIn}
-                title={t("lock.action.forget.title")}
-              >
-                {t("lock.action.forget")}
               </button>
             </div>
           </section>
