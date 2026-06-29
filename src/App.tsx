@@ -2524,6 +2524,7 @@ export default function App() {
                   key={currentEditorState.noteId}
                   markdown={editorMarkdown}
                   editable={editorEditable && !isBlockingSave}
+                  loading={currentEditorState.loading}
                   decryptFailed={currentEditorState.decryptFailed}
                   theme={resolvedTheme}
                   onChange={(md) =>

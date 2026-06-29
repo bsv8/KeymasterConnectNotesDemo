@@ -25,6 +25,7 @@ import { useI18n } from "../i18n/useI18n";
 export interface NoteEditorProps {
   markdown: string;
   editable: boolean;
+  loading: boolean;
   decryptFailed: boolean;
   theme: "light" | "dark";
   onChange: (markdown: string) => void;
@@ -32,6 +33,7 @@ export interface NoteEditorProps {
 
 /** 用 `tryParseMarkdownToBlocks` 初始化文档；后续转换统一走 markdown。 */
 export function NoteEditor(props: NoteEditorProps) {
+  const { t } = useI18n();
   const editor = useCreateBlockNote({
     // 走 markdown 导入/导出为单真值；不上传 JSON。
     initialContent: [{ type: "paragraph", content: [] }]
@@ -70,8 +72,20 @@ export function NoteEditor(props: NoteEditorProps) {
 
   const slashItems = useMemo(() => undefined, []);
 
+  if (props.loading) {
+    return (
+      <div className="editor editor-loading" role="status" aria-live="polite" aria-label={t("editor.loading.placeholder")}>
+        <div className="editor-loading__site">
+          <div className="editor-loading__sign">
+            <span className="editor-loading__eyebrow">Keymaster Connect</span>
+            <strong className="editor-loading__title">{t("editor.loading.placeholder")}</strong>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (props.decryptFailed) {
-    const { t } = useI18n();
     return (
       <div className="editor editor-failed">
         <div className="editor-failed__box">
