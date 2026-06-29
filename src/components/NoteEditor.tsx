@@ -8,6 +8,8 @@
 //     改动通过 `onChange(markdown)` 上抛。
 //   - 块类型只保留 markdown 友好集（paragraph / heading / list / quote /
 //     code / divider）；高级块（image / table / 多列）不引入。
+//   - 格式化入口改为"正文顶部常驻工具栏"；关闭 BlockNote 自带浮动 formatting
+//     toolbar，避免顶部常驻条和选区浮动条并存造成双重入口。
 //   - **不再承载 title 语义**——标题（文件名）改由 editor-stage__filename 输入框收口。
 //   - "保存"动作由父组件在 markdown 稳定后触发；编辑器不做自动保存。
 //   - 防回灌：使用 `lastLoadedRef` 记录"我最近一次灌入编辑器的 markdown"，
@@ -15,12 +17,13 @@
 //     这避免"save 成功后 App 重新传入相同 markdown → 触发 reload → 编辑器抖动"链路。
 //     上抛的 onChange 也会先把 `md` 写入 `lastLoadedRef`，让"自己刚上抛的"不会再被自己 reload。
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { BlockNoteView } from "@blocknote/mantine";
-import { useCreateBlockNote } from "@blocknote/react";
+import { BlockNoteViewEditor, useCreateBlockNote } from "@blocknote/react";
 import type { BlockNoteEditor } from "@blocknote/core";
 import "@blocknote/mantine/style.css";
 import { useI18n } from "../i18n/useI18n";
+import { EditorFormattingToolbar } from "./EditorFormattingToolbar";
 
 export interface NoteEditorProps {
   markdown: string;
@@ -70,8 +73,6 @@ export function NoteEditor(props: NoteEditorProps) {
     };
   }, [editor, props.decryptFailed, props.onChange]);
 
-  const slashItems = useMemo(() => undefined, []);
-
   if (props.loading) {
     return (
       <div className="editor editor-loading" role="status" aria-live="polite" aria-label={t("editor.loading.title")}>
@@ -102,12 +103,18 @@ export function NoteEditor(props: NoteEditorProps) {
   return (
     <div className="editor">
       <BlockNoteView
+        className="note-editor-view"
         editor={editor}
         editable={props.editable}
+        formattingToolbar={false}
+        renderEditor={false}
         // 默认 slash menu 列表满足 markdown 友好块；不引入 image / table 等。
-        slashMenu={slashItems as never}
+        slashMenu
         theme={props.theme}
-      />
+      >
+        <EditorFormattingToolbar disabled={!props.editable} />
+        <BlockNoteViewEditor />
+      </BlockNoteView>
     </div>
   );
 }
