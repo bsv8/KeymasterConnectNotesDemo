@@ -9,7 +9,6 @@
 
 import type { NoteDraft } from "../lib/notes";
 import { TagInput } from "./TagInput";
-import { useI18n } from "../i18n/useI18n";
 
 export interface DocumentToolbarProps {
   /** 当前 note draft；为 null 时不渲染整条工具条（folder / root 场景）。 */
@@ -22,7 +21,6 @@ export interface DocumentToolbarProps {
 }
 
 export function DocumentToolbar(props: DocumentToolbarProps) {
-  const { t } = useI18n();
   if (!props.draft) return null;
 
   return (
@@ -35,7 +33,6 @@ export function DocumentToolbar(props: DocumentToolbarProps) {
             disabled={!props.canEdit}
           />
         </div>
-        <p className="document-toolbar__hint">{t("toolbar.hint.tags")}</p>
       </div>
 
       {props.titleError ? (

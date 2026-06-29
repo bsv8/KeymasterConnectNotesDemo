@@ -1142,13 +1142,6 @@ code {
   min-width: 220px;
 }
 
-.document-toolbar__hint {
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
-
 .document-toolbar__error {
   margin: 0;
   font-size: 11.5px;
