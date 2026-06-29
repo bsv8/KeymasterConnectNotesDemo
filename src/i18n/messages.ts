@@ -77,7 +77,9 @@ export const messages: Messages = {
     // ----- Connect status -----
     "connect.state.idle": "Not connected",
     "connect.state.opening": "Connecting...",
+    "connect.state.opening.compact": "Wait",
     "connect.state.connected": "Ready",
+    "connect.state.connected.compact": "Ready",
     "connect.state.disconnected": "Disconnected",
     "connect.row.pageOrigin": "page origin",
     "connect.row.targetOrigin": "target origin",
@@ -90,6 +92,7 @@ export const messages: Messages = {
     "connect.action.login.title":
       "Start a brand-new connect.login flow; this abandons the current resume attempt",
     "connect.action.resume": "Reconnect",
+    "connect.action.resume.compact": "Retry",
     "connect.action.resume.title":
       "Re-open the popup and call connect.resume with the saved sessionId",
     "connect.action.forget": "Switch identity / change provider",
@@ -98,6 +101,7 @@ export const messages: Messages = {
     "connect.action.delete.title":
       "Delete all local notes data for the current publicKey and exit the workspace; the Keymaster identity itself is not removed",
     "connect.action.logout": "Sign out",
+    "connect.action.logout.compact": "Exit",
     "connect.action.logout.title":
       "Call connect.logout to revoke the current session and return to the sign-in shell",
     "connect.action.logout.dialogTitle": "Sign out of this session?",
@@ -381,7 +385,9 @@ export const messages: Messages = {
     // ----- Connect status -----
     "connect.state.idle": "未连接",
     "connect.state.opening": "连接中...",
+    "connect.state.opening.compact": "连接中",
     "connect.state.connected": "已就绪",
+    "connect.state.connected.compact": "就绪",
     "connect.state.disconnected": "已断开",
     "connect.row.pageOrigin": "page origin",
     "connect.row.targetOrigin": "target origin",
@@ -393,6 +399,7 @@ export const messages: Messages = {
     "connect.action.login": "重新登录",
     "connect.action.login.title": "从头走一次 connect.login；放弃当前 resume 尝试",
     "connect.action.resume": "恢复连接",
+    "connect.action.resume.compact": "恢复",
     "connect.action.resume.title": "重开 popup 并用本地 sessionId 调 connect.resume",
     "connect.action.forget": "切换身份 / 更换登录器",
     "connect.action.forget.title": "退回登录壳；不删除本地数据",
@@ -400,6 +407,7 @@ export const messages: Messages = {
     "connect.action.delete.title":
       "删除当前 publicKey 对应的全部本地 notes 数据并退出工作区；不会删除 Keymaster 身份本身",
     "connect.action.logout": "退出登录",
+    "connect.action.logout.compact": "退出",
     "connect.action.logout.title": "调 connect.logout 吊销当前 session 并退回登录壳",
     "connect.action.logout.dialogTitle": "确认退出当前 session？",
     "connect.action.logout.dialogMessage":
@@ -666,7 +674,9 @@ export const messages: Messages = {
     // ----- Connect status -----
     "connect.state.idle": "未接続",
     "connect.state.opening": "接続中…",
+    "connect.state.opening.compact": "接続中",
     "connect.state.connected": "準備完了",
+    "connect.state.connected.compact": "準備",
     "connect.state.disconnected": "切断済み",
     "connect.row.pageOrigin": "page origin",
     "connect.row.targetOrigin": "target origin",
@@ -679,6 +689,7 @@ export const messages: Messages = {
     "connect.action.login.title":
       "connect.login を最初からやり直します。現在の resume 試行は破棄されます。",
     "connect.action.resume": "再接続",
+    "connect.action.resume.compact": "再接続",
     "connect.action.resume.title":
       "ポップアップを開き直し、保存済み sessionId で connect.resume を呼びます",
     "connect.action.forget": "ID を切り替える / プロバイダを変更",
@@ -688,6 +699,7 @@ export const messages: Messages = {
     "connect.action.delete.title":
       "現在の publicKey のローカル notes データをすべて削除してワークスペースを終了します。Keymaster ID そのものは削除されません。",
     "connect.action.logout": "サインアウト",
+    "connect.action.logout.compact": "終了",
     "connect.action.logout.title":
       "connect.logout を呼び、現在の session を失効させてログイン画面に戻ります",
     "connect.action.logout.dialogTitle": "現在の session からサインアウトしますか？",

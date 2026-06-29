@@ -27,6 +27,7 @@ export function ConnectStatus(props: ConnectStatusProps) {
   const { t } = useI18n();
   const tone = stateTone(props.state);
   const label = stateActionLabel(props.state, t);
+  const compactLabel = stateActionCompactLabel(props.state, t);
   const canResume = props.state === "idle" || props.state === "disconnected";
   const isPending = props.state === "opening";
 
@@ -40,7 +41,8 @@ export function ConnectStatus(props: ConnectStatusProps) {
         title={canResume ? t("connect.action.resume.title") : label}
       >
         <span className="connect-status__pill-dot" aria-hidden="true" />
-        <span>{label}</span>
+        <span className="connect-status__label connect-status__label--full">{label}</span>
+        <span className="connect-status__label connect-status__label--compact">{compactLabel}</span>
       </button>
       <button
         type="button"
@@ -49,7 +51,8 @@ export function ConnectStatus(props: ConnectStatusProps) {
         disabled={props.isLoggingIn || isPending}
         title={t("connect.action.logout.title")}
       >
-        {t("connect.action.logout")}
+        <span className="connect-status__label connect-status__label--full">{t("connect.action.logout")}</span>
+        <span className="connect-status__label connect-status__label--compact">{t("connect.action.logout.compact")}</span>
       </button>
     </div>
   );
@@ -76,5 +79,20 @@ function stateTone(state: PopupUiState): "success" | "danger" | "pending" {
     case "idle":
     case "disconnected":
       return "danger";
+  }
+}
+
+function stateActionCompactLabel(
+  state: PopupUiState,
+  t: (key: import("../i18n/types").MessageKey) => string
+): string {
+  switch (state) {
+    case "opening":
+      return t("connect.state.opening.compact");
+    case "connected":
+      return t("connect.state.connected.compact");
+    case "idle":
+    case "disconnected":
+      return t("connect.action.resume.compact");
   }
 }

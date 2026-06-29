@@ -2309,18 +2309,23 @@ export default function App() {
         <div className="app-header__brand">
           <button
             type="button"
-            className="app-header__sidebar-toggle"
+            className={`app-header__sidebar-toggle ${sidebarOpen ? "is-open" : "is-closed"}`}
             onClick={() => setIsSidebarOpenOnMobile((v) => !(v ?? false))}
             aria-label={sidebarOpen ? t("header.sidebar.toggle.expand") : t("header.sidebar.toggle.collapse")}
             aria-expanded={sidebarOpen}
           >
-            {sidebarOpen ? t("header.sidebar.toggle.close") : t("header.sidebar.toggle.open")}
+            <span className="app-header__sidebar-toggle-pane" aria-hidden="true">
+              <span />
+              <span />
+            </span>
+            <span className="app-header__sidebar-toggle-arrow" aria-hidden="true" />
           </button>
           <h1>{t("app.title")}</h1>
         </div>
         <div className="app-header__tools">
           <div className="app-header__controls">
             <div className="app-header__control app-header__control--language" title={t("header.language.label")}>
+              <span className="app-header__control-icon app-header__control-icon--language" aria-hidden="true" />
               <select
                 value={language}
                 onChange={(e) => setLanguage(e.target.value as typeof language)}
@@ -2334,6 +2339,10 @@ export default function App() {
               </select>
             </div>
             <div className="app-header__control app-header__control--theme" title={t("header.theme.label")}>
+              <span
+                className={`app-header__control-icon app-header__control-icon--theme app-header__control-icon--theme-${themePreference}`}
+                aria-hidden="true"
+              />
               <select
                 value={themePreference}
                 onChange={(e) => setThemePreference(e.target.value as AppThemePreference)}
