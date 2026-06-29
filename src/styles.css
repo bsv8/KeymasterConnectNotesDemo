@@ -1058,7 +1058,7 @@ code {
    * 文档区左轴线分两层：
    * - `text-inline-start`：正文文字真正起笔的位置；
    * - `surface-inline-start`：把 BlockNote 左侧浮动 `+ / 拖拽` 也算进去后的
-   *   外边界位置。title / toolbar 应看齐这一层，而不是只盯正文文字。
+   *   外边界位置。title / 正文编辑面应看齐这一层，而不是只盯正文文字。
    */
   --document-text-inline-start: 32px;
   --document-content-inline-end: 32px;
@@ -1115,8 +1115,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 0;
-  margin: 12px var(--document-content-inline-end) 6px var(--document-surface-inline-start);
-  padding: 8px 14px 8px var(--document-side-menu-footprint);
+  margin: 12px var(--document-content-inline-end) 6px var(--document-text-inline-start);
+  padding: 8px 14px;
   background: var(--color-bg-soft);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
