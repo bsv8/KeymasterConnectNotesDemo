@@ -311,7 +311,33 @@ export default function App() {
 
   /* ============== 状态真值 ============== */
 
-  const [targetOrigin, setTargetOrigin] = useState(DEFAULT_TARGET_ORIGIN);
+  /**
+   * 锁屏 dial（`targetOrigin`）初始值。
+   *
+   * 设计缘由（施工单 2026-06-30 002 launch sessionWindowOrigin 显式注入
+   *          硬切换 + 后续 launch→reload 修正）：
+   *   - appView 启动期 transport target 由 `sessionWindowOrigin` 接管，
+   *     页面 dial 不会被消费；保持 `DEFAULT_TARGET_ORIGIN` 占位即可。
+   *   - 启动期外（direct / 持久 resume）必须让页面 dial 与 stored session
+   *     的 `targetOrigin` **对齐**——否则：
+   *       * 刷新后自动 `resume` 的"跨 origin"分支会把刚持久化的 session
+   *         当成别的 Keymaster 清掉；
+   *       * `LockScreen.showResumeEntry`（基于 `normalized === stored.targetOrigin`）
+   *         也会**隐藏**"恢复 session"按钮，用户只能重新登录；
+   *     这两条都会直接破坏施工单 2026-06-29 001 第 7.3 章
+   *     "appView 启动成功后用户刷新 → 走 connect.resume" 的预期。
+   *   - 因此把 `loadConnectSession()?.targetOrigin` 作为初始 dial；
+   *     用户后续在锁屏里改 dial 并点"登录"，仍然会触发正常的
+   *     `handleLogin()` 路径（fail-over 到新 Keymaster 时调用方按现行
+   *     策略覆盖持久层）。
+   */
+  const [targetOrigin, setTargetOrigin] = useState<string>(() => {
+    if (readLaunchTokenFromUrl() !== null) {
+      return DEFAULT_TARGET_ORIGIN;
+    }
+    const stored = loadConnectSession();
+    return stored?.targetOrigin ?? DEFAULT_TARGET_ORIGIN;
+  });
   const [popupState, setPopupState] = useState<PopupUiState>("idle");
   /**
    * Connect session 真值（施工单 2026-06-28 001 第 4.2 / 4.4 / 8.3 章）。
