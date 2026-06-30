@@ -22,6 +22,7 @@
 import type {
   PopupConnectionState,
   ProtocolMethod,
+  ProtocolReadyMessage,
   ProtocolRequestMessage,
   ProtocolResultMessage
 } from "./protocol";
@@ -32,6 +33,7 @@ export type ProtocolLogStage =
   | "popup_reused"
   | "waiting_ready"
   | "ready_received"
+  | "ready_sent"
   | "request_sent"
   | "waiting_result"
   | "result_received"
@@ -158,6 +160,61 @@ export function getReusableOpener(
     return null;
   }
   return { opener, targetOrigin: normalized };
+}
+
+/**
+ * appView child app 在自身 listener 就绪后，向 `window.opener`（Session Window）
+ * 发送顶层 `ready`。
+ *
+ * 设计缘由（施工单 2026-06-30 001 appView child ready + opener launch
+ *          硬切换第 4.2 / 4.3 / 5.一 / 6.一 / 6.不能怎么做 章）：
+ *   - appView 启动期 JustNote 是被 Session Window 打开的 child app；
+ *     由 child app 自己在 listener 装好之后向 opener 发 `ready`，让
+ *     Session Window 知道"child 已就绪，可以进入传统 popup";
+ *   - 这条消息与传统 popup 启动期 "Session Window → client web 发 ready"
+ *     完全对称——只是方向在 appView 下反过来：传统 popup 是 Session Window
+ *     当 child，在自己 listener 就绪后向 opener 发 ready；appView 下 Session
+ *     Window 是 opener，JustNote 当 child，所以由 JustNote 发 ready；
+ *   - **继续复用现有顶层 `ready`**——施工单 2026-06-30 001 第 4.2 / 6.不能
+ *     怎么做 章明确禁止新增 `child_ready` / `app_ready` 等专用消息，让上游
+ *     Session Window 可以用同一个 handler 同时处理两种入口方向下的 ready 收包；
+ *   - 这是一个**最小原子**：只校验 opener、组装顶层 `ready`、`postMessage`；
+ *     **不**在这里发 `connect.launch`，**不**启动任何新 session client，
+ *     **不**做任何重试风暴——这一切都由调用方统一收口；
+ *
+ * 关键约束：
+ *   1. 只校验 `window.opener` 存在且未关闭，**不**调用 `window.open(...)`
+ *      新开 popup；
+ *   2. 通过 `postMessage` 发送严格 `{ v: PROTOCOL_VERSION, type: "ready" }`；
+ *   3. targetOrigin = `normalizeOrigin(targetOrigin)`，与协议会话 origin 自洽；
+ *   4. 发送失败 → 返回 `false`，由调用方按"appView 启动失败"统一收口；
+ *   5. 只在 appView 启动期使用，direct 模式不会调到这里；
+ *
+ * 返回值：
+ *   - `true`  ⇒ 已成功发送 `ready` 给 opener；
+ *   - `false` ⇒ window.opener 不存在 / 已关 / 不可用 / 发送失败。
+ */
+export function postReadyToOpener(targetOrigin: string): boolean {
+  if (typeof window === "undefined") return false;
+  const opener = window.opener;
+  if (!opener) return false;
+  if (isPopupClosed(opener)) return false;
+  let normalized: string;
+  try {
+    normalized = normalizeOrigin(targetOrigin);
+  } catch {
+    return false;
+  }
+  const ready: ProtocolReadyMessage = {
+    v: PROTOCOL_VERSION,
+    type: "ready"
+  };
+  try {
+    opener.postMessage(ready, normalized);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -13,7 +13,9 @@
 //          施工单 2026-06-28 003 lock-screen-popup-close-and-relogin
 //          硬切换第 4.2 / 4.3 / 5.1 / 5.2 章 +
 //          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
-//          第 1-10 章）：
+//          第 1-10 章 +
+//          施工单 2026-06-30 001 appview child ready + opener launch 硬切换
+//          第 1-8 章）：
 //   - 顶层固定三态：
 //       1. appView 启动期 → 渲染 `AppViewLaunchShell`（不渲染 LockScreen）；
 //       2. `session === null` 且非 appView → 渲染 `LockScreen`；
@@ -73,6 +75,7 @@ import {
   normalizeOrigin,
   ProtocolTransportError,
   getReusableOpener,
+  postReadyToOpener,
   readLaunchTokenFromUrl,
   stripLaunchTokenFromUrl,
   type ProtocolLogEvent
@@ -333,15 +336,20 @@ export default function App() {
     readLaunchTokenFromUrl() !== null ? "appView" : "direct"
   );
   /**
-   * appView 启动期阶段（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章）。
+   * appView 启动期阶段（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章 +
+   *          施工单 2026-06-30 001 第 4.3 / 5.二 / 7 章）。
    * - `null` ⇒ 非 appView 模式 / 已完成启动；
-   * - `"launching"` ⇒ 正在调 `connect.launch`（已发 / 等 result）；
-   * - `"failed"` ⇒ 启动失败（opener 不可用 / connect.launch 返回失败 / 协议错误）；
+   * - `"launching"` ⇒ 正在按"先发 child ready，再 connect.launch"的顺序
+   *   执行 appView 启动握手；
+   * - `"failed"` ⇒ 启动失败（opener 不可用 / child `ready` 发送失败 /
+   *   connect.launch 返回失败 / 协议错误）；
    *
    * 注意：
    *   - 这里**不**单独存一个本地"openAppMode"布尔存储——`startupMode` 已经
    *     记录了启动期的启动模式，启动成功后会从 URL 去掉 `launchToken` 并
    *     把 `session` 写上，下一次重启就走 direct mode 走 `connect.resume`；
+   *   - **不**单独存一个"childReadyMode"本地模式——appView 下 child `ready`
+   *     由 JustNote 在 listener 就绪后向 opener 发，仍属于启动期阶段；
    *   - 启动失败后**不**回退到 LockScreen，也不允许 fallback 到 `connect.login`；
    *     必须明确告诉用户从 Keymaster 重新拉起。
    */
@@ -583,28 +591,42 @@ export default function App() {
     return () => window.removeEventListener("resize", evaluate);
   }, [isSidebarOpenOnMobile]);
 
-  /* ============== 启动时：appView 模式 → connect.launch ============== */
+  /* ============== 启动时：appView 模式 → child ready + connect.launch ============== */
 
   /**
-   * appView 启动期：调 `connect.launch`。
+   * appView 启动期：按"先发 child `ready`，再 `connect.launch`"的硬切换顺序
+   * 完成 Open App 启动握手。
    *
-   * 设计缘由（施工单 2026-06-29 001 第 4.3 / 5 / 6 / 7 章）：
+   * 设计缘由（施工单 2026-06-29 001 第 4.3 / 5 / 6 / 7 章 +
+   *          施工单 2026-06-30 001 第 1 / 4.3 / 5 / 7 章）：
    *   - 必须在 startup 期**优先**复用 `window.opener` 作为 transport 对端
    *     （`PopupSessionClient.adoptOpener`），**不**主动 `window.open`
    *     一扇新 popup；
+   *   - JustNote 作为被 Session Window 打开的 child app，在自身 listener
+   *     就绪后必须向 `window.opener` 发顶层 `ready`，让 Session Window
+   *     知道 child 已起来——这一步**必须**在 `connect.launch` 之前完成，
+   *     顺序颠倒会被上游直接拒收；
+   *   - 继续复用现有顶层 `ready`，**不**新增 `child_ready` /
+   *     `app_ready` 一类 appView 专用消息；
+   *   - child `ready` 一旦发出失败（opener 已关 / 不可用），视为 appView
+   *     启动失败；**不**重试，**不**假装已经 ready；
+   *   - `connect.launch` 仍由 JustNote 通过 opener transport 发送，
+   *     作为 appView 首登的唯一真值入口；
    *   - 成功 → 写本地 `StoredConnectSessionRecord`、`setSession(...)`、
    *     `history.replaceState` 去掉 URL 中的 `launchToken`，与 `connect.login`
    *     / `connect.resume` 走同一份收口逻辑；
-   *   - 失败（`no_opener` / `connect.launch` 返回失败 / 协议错误）→ 进入
-   *     appView 失败态，**不**自动 fallback 到 `connect.login`，**不**清本地
-   *     session（如果存在旧本地 session）。
+   *   - 失败（opener 不可用 / child `ready` 发送失败 / `connect.launch` 返回
+   *     失败 / 协议错误）→ 进入 appView 失败态，**不**自动 fallback 到
+   *     `connect.login`，**不**清本地 session（如果存在旧本地 session）。
    *
    * 边界：
    *   - 只跑**一次**（依赖 `[]`，mount 期触发）；
    *   - `appViewPhase === "launching"` 才允许进入；防止用户后续 reload 又
    *     触发；
    *   - 成功后即便 `localStorage` 里已有旧 session，**仍以本次 launch
-   *     结果为准**（施工单第 7.6 章）。
+   *     结果为准**；
+   *   - app 窗口被复用并重新加载时，只要 URL 还带 `launchToken` 且 opener
+   *     可用，就会重新走这条路径（reseture / 重新发 ready / 重新发 launch）。
    */
   const performAppViewLaunch = useCallback(
     async (launchToken: string) => {
@@ -618,8 +640,34 @@ export default function App() {
       try {
         const popup = getSessionClient();
         // 1) 优先收养 window.opener 作为 transport 对端，**不**新开 popup。
+        //    这一步负责把 message listener 装好并把内部状态切到 connected，
+        //    才能让后续 child `ready` 真有对端能收到。
         await popup.adoptOpener();
-        // 2) 调 `connect.launch`。
+        // 2) child app listener 就绪后，向 opener 发顶层 `ready`——
+        //    施工单 2026-06-30 001 第 4.3 / 5.二 / 6.二 / 7.3 章：
+        //      - 必须发生在 `connect.launch` 之前（顺序反过来 Session Window
+        //        会错过这条 ready、且会误把"首条 request" 当成 popup 入口
+        //        信号）；
+        //      - 失败 → 视为 appView 启动失败，**不**重试，**不** fallback，
+        //        也不冒充 ready；
+        const readySent = postReadyToOpener(normalizedTargetOrigin);
+        if (!readySent) {
+          pushLog({
+            at: Date.now(),
+            stage: "no_opener",
+            message:
+              "window.opener unavailable while posting child ready; treating as appView launch failure"
+          });
+          setAppViewFailureReason(t("appView.failed.hint"));
+          setAppViewPhase("failed");
+          return;
+        }
+        pushLog({
+          at: Date.now(),
+          stage: "ready_sent",
+          message: "posted child ready to window.opener before connect.launch"
+        });
+        // 3) 调 `connect.launch`——appView 首登唯一真值入口。
         const requestId = makeRequestId();
         const request = buildConnectLaunchRequest({
           launchToken,
@@ -634,7 +682,7 @@ export default function App() {
           return;
         }
         const parsed = parseConnectLaunchResult(response.result as never);
-        // 3) 与 connect.login / connect.resume 共用同一份持久化结构。
+        // 4) 与 connect.login / connect.resume 共用同一份持久化结构。
         const record: StoredConnectSessionRecord = {
           v: 1,
           sessionId: parsed.connectSessionId,
@@ -652,17 +700,18 @@ export default function App() {
           targetOrigin: normalizedTargetOrigin
         });
         setPopupState("connected");
-        // 4) 去掉 URL 中的 `launchToken`，避免刷新后再次消费一次性凭证。
+        // 5) 去掉 URL 中的 `launchToken`，避免刷新后再次消费一次性凭证。
         stripLaunchTokenFromUrl();
         setAppViewPhase(null);
       } catch (err) {
         // appView 启动失败：transport / 协议层都按"无法完成 Open App 启动"
-        // 统一收口；**不**清本地 session，**不**回退到 LockScreen。
+        // 统一收口；**不**清本地 session，**不**回退到 LockScreen，
+        // **不**自动 fallback 到 `connect.login`。
         let reason: string;
         if (err instanceof ProtocolTransportError && err.code === "no_opener") {
           reason = t("appView.failed.hint");
         } else if (shouldSilenceErrorOnLockScreen(err)) {
-          // 极少出现：opener Session Window 在 ready 之前被关掉。
+          // 极少出现：opener Session Window 在 ready/launch 之间被关掉。
           reason = t("appView.failed.hint");
         } else {
           reason = formatTransportError(err, t);
@@ -2440,13 +2489,19 @@ export default function App() {
     return "login";
   })();
 
-  // appView 启动期（URL 带 launchToken）：必须先跑 `connect.launch`，
+  // appView 启动期（URL 带 launchToken）：必须按"先发 child `ready`，
+  // 再 `connect.launch`"的硬切换顺序完成 Open App 启动握手。
   // **不**渲染 LockScreen，**不**读本地 session，**不**自动 fallback
   // 到 `connect.login`。
   //
-  // 设计缘由（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章）：
+  // 设计缘由（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章 +
+  //          施工单 2026-06-30 001 第 4.3 / 5 / 7 章）：
   //   - 启动期阶段 = `appViewPhase`：mount 时根据 `startupMode` 初始化为
   //     `"launching"`，成功 → null，失败 → `"failed"`；
+  //   - 启动握手真值是**三段**：
+  //       1. URL 里的 `launchToken`（启动模式真值）；
+  //       2. 顶层 `ready` 发给 opener（child listener 已就绪真值）；
+  //       3. `connect.launch` 首登真值。
   //   - 启动成功后会 `setSession(...)`，渲染分支会自然落到工作区；
   //   - 启动失败进入专用失败态；不渲染 LockScreen、也不允许 fallback。
   if (appViewPhase !== null) {

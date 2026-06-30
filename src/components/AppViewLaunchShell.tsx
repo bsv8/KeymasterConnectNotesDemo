@@ -2,7 +2,9 @@
 // appView 启动壳：URL 含 `launchToken` 时 JustNote 顶层渲染的唯一视图。
 //
 // 设计缘由（施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
-//          第 6.五 / 6.六 / 7 章）：
+//          第 6.五 / 6.六 / 7 章 +
+//          施工单 2026-06-30 001 appview child ready + opener launch 硬切换
+//          第 6.四 / 7 章）：
 //   - appView 启动期**不**渲染 LockScreen——`launchToken` 是 Keymaster
 //     launcher 已经预建 session 的一次性凭证，不存在"用户输入 target origin
 //     后手工登录"的入口；
@@ -16,7 +18,11 @@
 //   - popup transport；
 //   - 协议请求；
 //   - 本地 session 持久化；
-// 它只负责"启动期状态视觉"。
+//   - 协议握手真值；
+// 它只负责"启动期状态视觉"——真正的握手真值仍是：
+//   1. URL `launchToken`（启动模式真值）
+//   2. 发给 opener 的顶层 `ready`（child listener 就绪真值）
+//   3. `connect.launch`（Open App 首登真值）
 
 import { useI18n } from "../i18n/useI18n";
 
