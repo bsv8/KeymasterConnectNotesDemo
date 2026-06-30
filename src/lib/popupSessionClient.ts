@@ -27,6 +27,18 @@
 //     （详见 `adoptOpener`），**不**主动 `window.open` 一扇新的 popup；
 //     但运行期若这扇 opener 后来被关闭，下次 `runRequest` 仍允许重新开 popup
 //     走 `connect.resume` 续上。
+//   - **两种 origin 真值的解耦**（施工单 2026-06-30 002 launch sessionWindowOrigin
+//     显式注入硬切换第 4.1 / 4.2 / 5 / 6 章 +
+//          依赖项目 keymaster.cc 施工单 2026-06-30 004 第 4.2 / 5 章）：
+//       - 构造时若同时给 `sessionWindowOrigin`，则该 origin 覆盖 `targetOrigin`
+//         作为 transport 的真实目标 origin——`ensureSession()` /
+//         `adoptOpener()` / `runRequest()` 全部走 `sessionWindowOrigin`，
+//         完全不再读 `opts.targetOrigin`；
+//       - 仅在 appView / launch 模式下传 `sessionWindowOrigin`；direct / popup
+//         模式保持原行为不变；
+//       - `sessionWindowOrigin` 真值的来源由 caller 自己保证
+//         （`readSessionWindowOriginFromUrl()` + null 检查），本类不兜底
+//         也不回退到默认 `https://keymaster.cc`。
 //
 // 这一层拥有：
 //   - 长期 `message` 监听（ResultDispatcher）；
@@ -66,7 +78,36 @@ import {
 const POPUP_NAME = "justnote";
 
 export interface PopupSessionClientOptions {
+  /**
+   * popup / direct 模式 transport target origin。
+   * 当 `sessionWindowOrigin` 缺失时（direct / popup 模式）本字段作为
+   * transport 的真实目标 origin。
+   *
+   * 在 appView / launch 模式下若同时给 `sessionWindowOrigin`，该字段
+   * **不**再被读——见下。
+   */
   targetOrigin: string;
+  /**
+   * appView / launch 模式 transport target origin。
+   *
+   * 设计缘由（施工单 2026-06-30 002 第 4.1 / 4.2 / 5 / 6 章 +
+   *          依赖项目 keymaster.cc 施工单 2026-06-30 004 第 4.2 / 5 章）：
+   *   - 启动期 JustNote 被 Session Window 拉起；Session Window 在
+   *     `openClientApp()` 时把自己的 `window.location.origin` 显式注入
+   *     child URL（`?sessionWindowOrigin=`）；
+   *   - child app 拿到这个值后，**整个** transport 生命周期都使用它——
+   *     **不**回退到 `targetOrigin`，**不**回退到默认 `https://keymaster.cc`；
+   *   - 一旦设置，所有 transport 真值（`ensureSession()` / `adoptOpener()`
+   *     / `runRequest()`）都改用它；
+   *   - 调用方在传进来之前必须自己校验过（缺失 / 非法已经在 caller 那一层
+   *     被截断），本类不再二次校验。
+   *
+   * 关键约束：
+   *   - 不允许传一半——要么完全不传（direct / popup），要么传一个已 normalize
+   *     过的合法 origin（appView / launch）；
+   *   - popup / direct 模式留空走 `targetOrigin` 路径，行为不变。
+   */
+  sessionWindowOrigin?: string;
   popupWidth: number;
   popupHeight: number;
   readyTimeoutMs: number;
@@ -118,6 +159,26 @@ export class PopupSessionClient {
   }
 
   /**
+   * "生效中的 transport origin"——`PopupSessionClient` 真正用作 transport
+   * 对端 origin 的那一份。
+   *
+   * 设计缘由（施工单 2026-06-30 002 launch sessionWindowOrigin 显式注入
+   *          硬切换第 4.1 / 4.2 / 5 / 6 章）：
+   *   - appView / launch 模式下 `opts.sessionWindowOrigin` 优先；缺失
+   *     时退回 `opts.targetOrigin`（direct / popup 模式）；
+   *   - 这是 transport 的**唯一**真值通道——`ensureSession()` /
+   *     `adoptOpener()` / `runRequest()` / `cancelRequest()` 全部走它；
+   *   - 调用方在传 `sessionWindowOrigin` 进来之前必须自己保证它是已
+   *     normalize 的合法 origin；本方法**不**做二次校验，仅做 normalize。
+   */
+  private getEffectiveTargetOrigin(): string {
+    if (this.opts.sessionWindowOrigin && this.opts.sessionWindowOrigin.length > 0) {
+      return normalizeOrigin(this.opts.sessionWindowOrigin);
+    }
+    return normalizeOrigin(this.opts.targetOrigin);
+  }
+
+  /**
    * 确保 session 处于 connected 状态：
    *   - 若 state === connected 且 popup 还活着：直接返回；
    *   - 若 popup 句柄丢了 / 关闭了：重开；
@@ -128,7 +189,7 @@ export class PopupSessionClient {
    * 不会主动去找 opener。
    */
   async ensureSession(): Promise<void> {
-    const targetOrigin = normalizeOrigin(this.opts.targetOrigin);
+    const targetOrigin = this.getEffectiveTargetOrigin();
     if (this.state === "connected" && this.currentTargetOrigin === targetOrigin && !isPopupClosed(this.popup)) {
       return;
     }
@@ -182,7 +243,9 @@ export class PopupSessionClient {
    *     `ensureSession()` 重新开 popup。
    */
   async adoptOpener(): Promise<void> {
-    const targetOrigin = normalizeOrigin(this.opts.targetOrigin);
+    // 施工单 2026-06-30 002 第 4.2 / 5 / 6 章：appView 启动期 transport target
+    // 走 `sessionWindowOrigin`；direct / popup 模式才会落到 `targetOrigin`。
+    const targetOrigin = this.getEffectiveTargetOrigin();
     const reusable = getReusableOpener(targetOrigin);
     if (!reusable) {
       this.log("no_opener", { targetOrigin }, "no reusable opener for appView");

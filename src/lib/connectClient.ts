@@ -4,11 +4,13 @@
 // 设计缘由（施工单第 6 章 + 2026-06-27 note-open-cancel-and-transport-hard-switch
 //          第 4.2 / 8.2 章 +
 //          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
-//          第 4.4 / 6.四 章）：
+//          第 4.4 / 6.四 章 +
+//          施工单 2026-06-30 002 launch sessionWindowOrigin 显式注入硬切换
+//          第 4.1 / 4.2 / 5 / 6 章）：
 //   - popup 复用策略与当前应用对齐：单页只维护一个 popup session client。
 //   - 本文件只暴露 transport 原子：开窗、消息监听、close 轮询、
 //     targetOrigin 校验、消息分发、window.opener 探测 / URL 启动 token
-//     解析。session 生命周期由 session client 拥有。
+//     与 sessionWindowOrigin 解析。session 生命周期由 session client 拥有。
 //   - **保留** `result` 派发到 `requestId` 的回调注册：分发器**永远**按
 //     `result.id` 路由，不做"只认最后一条 requestId"的退化。
 //   - `cancel` 是 fire-and-forget，**不**等待 ack；上层不要从分发器
@@ -18,6 +20,12 @@
 //     `getReusableOpener()` 让上层判断"是否有一扇已存在的 Keymaster
 //     Session Window 可以被收养"；不允许在 opener 已存在时还偷偷
 //     `window.open` 一扇新的 popup。
+//   - **两种 origin 真值不再混用**（施工单 2026-06-30 002 第 4.1 章）：
+//       - popup / direct 模式 transport target = `targetOrigin`
+//       - appView / launch 模式 transport target = `sessionWindowOrigin`
+//     `readSessionWindowOriginFromUrl()` 只在 launchToken 模式下提供，缺失
+//     / 非法一律返回 null，由 caller 走 appView 失败态——不允许 fallback
+//     到 `targetOrigin` 也不允许 fallback 到默认 `https://keymaster.cc`。
 
 import type {
   PopupConnectionState,
@@ -264,6 +272,101 @@ export function stripLaunchTokenFromUrl(search?: string): boolean {
   }
   if (!params.has("launchToken")) return false;
   params.delete("launchToken");
+  const nextSearch = params.toString();
+  const nextUrl =
+    window.location.pathname +
+    (nextSearch.length > 0 ? `?${nextSearch}` : "") +
+    window.location.hash;
+  try {
+    window.history.replaceState(null, "", nextUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 从当前 URL 中解析 `sessionWindowOrigin`。
+ *
+ * 设计缘由（施工单 2026-06-30 002 launch sessionWindowOrigin 显式注入硬切换
+ *          第 4.1 / 4.2 / 4.3 / 5 / 6 章 +
+ *          依赖项目 keymaster.cc 施工单 2026-06-30 004 第 4.2 / 5 章）：
+ *   - appView / launch 模式 transport target 的**唯一**真值 = URL
+ *     `?sessionWindowOrigin=`；
+ *   - 这个值由 Session Window 在 `openClientApp()` 时显式注入；
+ *     下游 child app **不**读 `window.opener.location.origin`、
+ *     **不**读 `document.referrer`、**不**用 `postMessage(..., "*")`；
+ *   - 必须是完整 `origin`（`scheme + host + port`），仅 `domain:port`
+ *     也按非法处理；
+ *   - 缺失 / 空字符串 / 非 URL / 非 origin 形式 → 一律返回 null，由 caller
+ *     走 appView fail-closed 路径，**不**回退到 `targetOrigin` 也**不**
+ *     回退到默认 `https://keymaster.cc`；
+ *   - popup / direct 模式不会被调用，无需特别关心其它模式下此函数的副作用。
+ *
+ * 返回值：
+ *   - `string`：合法 origin（已 normalize），caller 直接用于 `postMessage`
+ *     的 targetOrigin 与 `PopupSessionClient` 的 transport origin；
+ *   - `null`：缺失 / 非法 / 非 origin 形式。
+ */
+export function readSessionWindowOriginFromUrl(search?: string): string | null {
+  if (typeof window === "undefined") return null;
+  const raw = search ?? window.location.search;
+  if (raw.length === 0) return null;
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(raw);
+  } catch {
+    return null;
+  }
+  const value = params.get("sessionWindowOrigin");
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  // 只接受完整 origin（scheme + host + port）；`domain:port` 这类不完整形态
+  // 直接按非法处理。
+  if (parsed.protocol.length === 0 || parsed.host.length === 0) return null;
+  // 额外一道 `=== parsed.origin` 校验：把"主串 + 额外 path/query"这类形态
+  // 截掉（例如 `https://x.com/some/path` → parsed.origin 是 `https://x.com`，
+  // 与 trimmed 不相等，按非法处理）。
+  if (trimmed !== parsed.origin) return null;
+  return parsed.origin;
+}
+
+/**
+ * 从当前 URL 中移除 `sessionWindowOrigin`，保留其它 query 参数；用
+ * `history.replaceState` 改地址，不整页刷新。
+ *
+ * 设计缘由（施工单 2026-06-30 002 launch sessionWindowOrigin 显式注入
+ *          硬切换第 5.一 / 6 章）：
+ *   - `sessionWindowOrigin` 在 `connect.launch` 成功后**必须**清掉：
+ *       * 该值只在 appView 启动期有意义；
+ *       * launch 成功后 JustNote 进入 direct / resume 模型；
+ *       * URL 里留着它会误导后续 reload 误判"还在 appView 模式"；
+ *   - 与 `stripLaunchTokenFromUrl()` 配对使用：launchToken 是凭证、
+ *     sessionWindowOrigin 是 transport 真值，都不应该长期留在 URL；
+ *   - 与 `stripLaunchTokenFromUrl()` 一样，仅做 URL 改写，**不**触发整页
+ *     刷新。
+ *
+ * 返回：是否真的做了修改（便于上层记录日志）。
+ */
+export function stripSessionWindowOriginFromUrl(search?: string): boolean {
+  if (typeof window === "undefined") return false;
+  const raw = search ?? window.location.search;
+  if (raw.length === 0) return false;
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(raw);
+  } catch {
+    return false;
+  }
+  if (!params.has("sessionWindowOrigin")) return false;
+  params.delete("sessionWindowOrigin");
   const nextSearch = params.toString();
   const nextUrl =
     window.location.pathname +

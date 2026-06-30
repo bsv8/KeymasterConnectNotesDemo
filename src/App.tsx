@@ -15,6 +15,8 @@
 //          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
 //          第 1-10 章 +
 //          施工单 2026-06-30 001 appview child ready + opener launch 硬切换
+//          第 1-8 章 +
+//          施工单 2026-06-30 002 launch sessionWindowOrigin 显式注入硬切换
 //          第 1-8 章）：
 //   - 顶层固定三态：
 //       1. appView 启动期 → 渲染 `AppViewLaunchShell`（不渲染 LockScreen）；
@@ -77,7 +79,9 @@ import {
   getReusableOpener,
   postReadyToOpener,
   readLaunchTokenFromUrl,
+  readSessionWindowOriginFromUrl,
   stripLaunchTokenFromUrl,
+  stripSessionWindowOriginFromUrl,
   type ProtocolLogEvent
 } from "./lib/connectClient";
 import { PopupSessionClient } from "./lib/popupSessionClient";
@@ -337,12 +341,14 @@ export default function App() {
   );
   /**
    * appView 启动期阶段（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章 +
-   *          施工单 2026-06-30 001 第 4.3 / 5.二 / 7 章）。
+   *          施工单 2026-06-30 001 第 4.3 / 5.二 / 7 章 +
+   *          施工单 2026-06-30 002 第 4 / 5 / 6 章）。
    * - `null` ⇒ 非 appView 模式 / 已完成启动；
    * - `"launching"` ⇒ 正在按"先发 child ready，再 connect.launch"的顺序
    *   执行 appView 启动握手；
    * - `"failed"` ⇒ 启动失败（opener 不可用 / child `ready` 发送失败 /
-   *   connect.launch 返回失败 / 协议错误）；
+   *   connect.launch 返回失败 / 协议错误 / `sessionWindowOrigin` 缺失或
+   *   非法）；
    *
    * 注意：
    *   - 这里**不**单独存一个本地"openAppMode"布尔存储——`startupMode` 已经
@@ -350,6 +356,9 @@ export default function App() {
    *     把 `session` 写上，下一次重启就走 direct mode 走 `connect.resume`；
    *   - **不**单独存一个"childReadyMode"本地模式——appView 下 child `ready`
    *     由 JustNote 在 listener 就绪后向 opener 发，仍属于启动期阶段；
+   *   - appView 模式下 transport target origin **不**再读默认
+   *     `https://keymaster.cc` 也不回退到 UI 上的 `targetOrigin`，由
+   *     `sessionWindowOrigin` 统一接管；缺失 / 非法直接走 appView 失败态；
    *   - 启动失败后**不**回退到 LockScreen，也不允许 fallback 到 `connect.login`；
    *     必须明确告诉用户从 Keymaster 重新拉起。
    */
@@ -485,10 +494,33 @@ export default function App() {
 
   /* ============== session client 单例 ============== */
 
-  function getSessionClient(): PopupSessionClient {
+  /**
+   * 取（必要时新建）当前 popup session client。
+   *
+   * 设计缘由（施工单 2026-06-30 002 第 4.1 / 4.2 / 5.一 / 6 章）：
+   *   - direct / popup 模式：`sessionWindowOrigin` 留空，transport 走
+   *     `targetOrigin`（用户输入 + 默认 `https://keymaster.cc`），行为完全
+   *     不变；
+   *   - appView / launch 模式：传 `sessionWindowOrigin`，`PopupSessionClient`
+   *     内部会用它覆盖 `targetOrigin`——`ensureSession()` / `adoptOpener()` /
+   *     `runRequest()` 全部走 `sessionWindowOrigin`，**不**回退到
+   *     `targetOrigin` 也不回退到默认 `https://keymaster.cc`；
+   *   - `sessionWindowOrigin` 的缺失 / 合法性由 caller 在调用本方法之前
+   *     负责；本方法只决定 transport 用哪一份 origin，**不**做兜底。
+   */
+  function getSessionClient(opts?: { sessionWindowOrigin?: string | null }): PopupSessionClient {
+    const override = opts?.sessionWindowOrigin ?? null;
+    // appView / launch 模式下若 caller 没拿到合法 `sessionWindowOrigin`，我们
+    // 直接抛错：popup session 的 transport 不会有"猜一个能用"的回退路径。
+    if (override !== null && override.length === 0) {
+      throw new Error(
+        "PopupSessionClient requires a non-empty targetOrigin (or sessionWindowOrigin) to start a transport"
+      );
+    }
     if (!sessionRef.current) {
       sessionRef.current = new PopupSessionClient({
         targetOrigin: normalizedTargetOrigin || targetOrigin,
+        ...(override ? { sessionWindowOrigin: override } : {}),
         popupWidth: POPUP_WIDTH,
         popupHeight: POPUP_HEIGHT,
         readyTimeoutMs: READY_TIMEOUT_MS,
@@ -598,7 +630,8 @@ export default function App() {
    * 完成 Open App 启动握手。
    *
    * 设计缘由（施工单 2026-06-29 001 第 4.3 / 5 / 6 / 7 章 +
-   *          施工单 2026-06-30 001 第 1 / 4.3 / 5 / 7 章）：
+   *          施工单 2026-06-30 001 第 1 / 4.3 / 5 / 7 章 +
+   *          施工单 2026-06-30 002 第 1 / 2 / 4 / 5 / 6 / 7 章）：
    *   - 必须在 startup 期**优先**复用 `window.opener` 作为 transport 对端
    *     （`PopupSessionClient.adoptOpener`），**不**主动 `window.open`
    *     一扇新 popup；
@@ -612,12 +645,28 @@ export default function App() {
    *     启动失败；**不**重试，**不**假装已经 ready；
    *   - `connect.launch` 仍由 JustNote 通过 opener transport 发送，
    *     作为 appView 首登的唯一真值入口；
+   *   - appView / launch 模式的 transport target origin **不再**走默认
+   *     `https://keymaster.cc` / 用户输入的 `targetOrigin`，而是 Session Window
+   *     在 `openClientApp()` 时显式注入的 `sessionWindowOrigin`：
+   *       * `getSessionClient({ sessionWindowOrigin })` 把 `sessionWindowOrigin`
+   *         灌进 popup session client 的内部真值通道；
+   *       * `adoptOpener()` / `runRequest()` / `cancelRequest()` 全部走它；
+   *       * `postReadyToOpener(sessionWindowOrigin)` 用它把 child `ready`
+   *         投递到正确的 origin 校验通道；
+   *       * 持久化 `StoredConnectSessionRecord.targetOrigin` 仍保留
+   *         `sessionWindowOrigin` 作为后续 connect.resume / cipher.* 的
+   *         显式 origin 真值字段（schema 字段不动，**值**变了）；
+   *   - 缺失 / 非法 `sessionWindowOrigin` → appView **直接**失败，
+   *     **不**回退到 `targetOrigin`，**不**回退到默认
+   *     `https://keymaster.cc`，**不**自动 fallback 到 `connect.login`；
    *   - 成功 → 写本地 `StoredConnectSessionRecord`、`setSession(...)`、
-   *     `history.replaceState` 去掉 URL 中的 `launchToken`，与 `connect.login`
-   *     / `connect.resume` 走同一份收口逻辑；
+   *     `history.replaceState` 去掉 URL 中的 `launchToken` 与
+   *     `sessionWindowOrigin`，与 `connect.login` / `connect.resume` 走
+   *     同一份收口逻辑；
    *   - 失败（opener 不可用 / child `ready` 发送失败 / `connect.launch` 返回
-   *     失败 / 协议错误）→ 进入 appView 失败态，**不**自动 fallback 到
-   *     `connect.login`，**不**清本地 session（如果存在旧本地 session）。
+   *     失败 / 协议错误 / `sessionWindowOrigin` 缺失）→ 进入 appView 失败态，
+   *     **不**自动 fallback 到 `connect.login`，**不**清本地 session
+   *     （如果存在旧本地 session）。
    *
    * 边界：
    *   - 只跑**一次**（依赖 `[]`，mount 期触发）；
@@ -630,27 +679,41 @@ export default function App() {
    */
   const performAppViewLaunch = useCallback(
     async (launchToken: string) => {
-      if (!normalizedTargetOrigin) {
-        setAppViewFailureReason(t("app.error.targetOriginInvalid"));
+      // 施工单 2026-06-30 002 第 4.2 / 4.3 / 5 / 6 章：appView / launch 模式下
+      // transport target 的真值来源 = URL `?sessionWindowOrigin=`；缺失 / 非法
+      // 一律 fail-closed，**不**回退到 `targetOrigin` 也不回退到默认
+      // `https://keymaster.cc`。
+      const sessionOrigin = readSessionWindowOriginFromUrl();
+      if (!sessionOrigin) {
+        pushLog({
+          at: Date.now(),
+          stage: "no_opener",
+          message:
+            "sessionWindowOrigin missing or invalid; appView launch fails-closed per 2026-06-30 002 hard-switch"
+        });
+        setAppViewFailureReason(t("appView.failed.hint"));
         setAppViewPhase("failed");
         return;
       }
       setAuthFlow("login");
       setLastError(null);
       try {
-        const popup = getSessionClient();
+        const popup = getSessionClient({ sessionWindowOrigin: sessionOrigin });
         // 1) 优先收养 window.opener 作为 transport 对端，**不**新开 popup。
         //    这一步负责把 message listener 装好并把内部状态切到 connected，
         //    才能让后续 child `ready` 真有对端能收到。
+        //    popup 内部 transport target origin 已经走 `sessionWindowOrigin`。
         await popup.adoptOpener();
         // 2) child app listener 就绪后，向 opener 发顶层 `ready`——
-        //    施工单 2026-06-30 001 第 4.3 / 5.二 / 6.二 / 7.3 章：
+        //    施工单 2026-06-30 001 第 4.3 / 5.二 / 6.二 / 7.3 章 +
+        //    施工单 2026-06-30 002 第 5.一 / 6 章：
         //      - 必须发生在 `connect.launch` 之前（顺序反过来 Session Window
         //        会错过这条 ready、且会误把"首条 request" 当成 popup 入口
         //        信号）；
         //      - 失败 → 视为 appView 启动失败，**不**重试，**不** fallback，
         //        也不冒充 ready；
-        const readySent = postReadyToOpener(normalizedTargetOrigin);
+        //      - 目标 origin = `sessionWindowOrigin`，**不**用 `targetOrigin`。
+        const readySent = postReadyToOpener(sessionOrigin);
         if (!readySent) {
           pushLog({
             at: Date.now(),
@@ -665,9 +728,11 @@ export default function App() {
         pushLog({
           at: Date.now(),
           stage: "ready_sent",
-          message: "posted child ready to window.opener before connect.launch"
+          message:
+            "posted child ready to window.opener before connect.launch using sessionWindowOrigin"
         });
         // 3) 调 `connect.launch`——appView 首登唯一真值入口。
+        //    transport target origin 已经被 popup 内部切到 `sessionWindowOrigin`。
         const requestId = makeRequestId();
         const request = buildConnectLaunchRequest({
           launchToken,
@@ -683,11 +748,19 @@ export default function App() {
         }
         const parsed = parseConnectLaunchResult(response.result as never);
         // 4) 与 connect.login / connect.resume 共用同一份持久化结构。
+        //    `targetOrigin` 字段 schema 不变，但**值**改为 `sessionWindowOrigin`
+        //    ——施工单 2026-06-30 002 第 4.1 / 5.二 / 6 章：
+        //      - 持久化的 `targetOrigin` 在本单之后**只**记录"本 connectSession
+        //        真实绑定的那台 Session Window"（来自 launch / resume 时的
+        //        sessionWindowOrigin / 当时 popup 看到的对端），不再记录
+        //        "popup 模式下用户输入的 default origin"；
+        //      - direct 模式（connect.login / connect.resume）路径不变，
+        //        仍写 `normalizedTargetOrigin`。
         const record: StoredConnectSessionRecord = {
           v: 1,
           sessionId: parsed.connectSessionId,
           ownerPublicKeyHex: parsed.ownerPublicKeyHex,
-          targetOrigin: normalizedTargetOrigin,
+          targetOrigin: sessionOrigin,
           claimsSnapshot: parsed.claims as Record<string, unknown>,
           resolvedAt: parsed.resolvedAt
         };
@@ -697,11 +770,13 @@ export default function App() {
           ownerPublicKeyHex: parsed.ownerPublicKeyHex,
           claims: parsed.claims as Record<string, unknown>,
           resolvedAt: parsed.resolvedAt,
-          targetOrigin: normalizedTargetOrigin
+          targetOrigin: sessionOrigin
         });
         setPopupState("connected");
-        // 5) 去掉 URL 中的 `launchToken`，避免刷新后再次消费一次性凭证。
+        // 5) 去掉 URL 中的 `launchToken` 与 `sessionWindowOrigin`，避免刷新后
+        //    再次消费一次性凭证 / 误以为还在 appView 模式。
         stripLaunchTokenFromUrl();
+        stripSessionWindowOriginFromUrl();
         setAppViewPhase(null);
       } catch (err) {
         // appView 启动失败：transport / 协议层都按"无法完成 Open App 启动"
@@ -723,7 +798,7 @@ export default function App() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [normalizedTargetOrigin, t]
+    [t]
   );
 
   /* ============== 启动时：自动读取本地 connect session 并 resume ============== */
