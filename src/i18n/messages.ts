@@ -62,6 +62,16 @@ export const messages: Messages = {
       "The saved session is no longer valid. Please sign in again to obtain a new session.",
     "lock.footer":
       "JustNote stores note data and session records on this browser only. It never stores your password. After refresh it first tries to resume the session; explicit sign-out returns to the sign-in screen.",
+    // ----- AppView launch shell -----
+    "appView.title": "Starting JustNote from Keymaster",
+    "appView.launching.title": "Launching from Keymaster...",
+    "appView.launching.description":
+      "JustNote is being launched as an appView. The Keymaster Session Window is preparing the session; this page will move to the workspace as soon as the launch completes.",
+    "appView.failed.title": "Cannot complete Open App launch",
+    "appView.failed.description":
+      "This JustNote page was opened from Keymaster Open App, but the launch could not be completed.",
+    "appView.failed.hint":
+      "Please close this tab and relaunch JustNote from the Keymaster Open App entry. Do not paste this URL into a browser yourself; the launch token is single-use.",
     // ----- Header -----
     "header.theme.label": "Theme",
     "header.theme.dark": "Dark",
@@ -387,6 +397,16 @@ export const messages: Messages = {
       "本地保存的 session 已失效。请重新登录以获取新 session。",
     "lock.footer":
       "JustNote 只在当前浏览器保存数据和会话记录，不保存密码。刷新页面时会优先尝试恢复 session；只有显式退出才会回到登录页。",
+    // ----- AppView launch shell -----
+    "appView.title": "正在从 Keymaster 启动 JustNote",
+    "appView.launching.title": "正在从 Keymaster 启动…",
+    "appView.launching.description":
+      "JustNote 正在以 appView 模式启动。Keymaster Session Window 正在准备 session；启动完成后会自动进入工作区。",
+    "appView.failed.title": "无法完成 Open App 启动",
+    "appView.failed.description":
+      "本 JustNote 是从 Keymaster 的 Open App 入口拉起的，但本次启动未能完成。",
+    "appView.failed.hint":
+      "请关闭本标签页，回到 Keymaster 的 Open App 入口重新拉起 JustNote。请勿手工把带 token 的 URL 粘贴到浏览器里：launch token 是一次性凭证。",
     // ----- Header -----
     "header.theme.label": "主题",
     "header.theme.dark": "黑",
@@ -693,6 +713,16 @@ export const messages: Messages = {
       "保存済みの session は無効です。再度サインインして新しい session を取得してください。",
     "lock.footer":
       "JustNote はこのブラウザにだけデータと session 記録を保存し、パスワードは保存しません。再読み込み時はまず session の再開を試み、明示的なサインアウトだけがログイン画面に戻します。",
+    // ----- AppView launch shell -----
+    "appView.title": "Keymaster から JustNote を起動中",
+    "appView.launching.title": "Keymaster から起動しています…",
+    "appView.launching.description":
+      "JustNote を appView として起動中です。Keymaster Session Window が session を準備しています。起動が完了するとワークスペースへ移動します。",
+    "appView.failed.title": "Open App 起動を完了できません",
+    "appView.failed.description":
+      "この JustNote は Keymaster の Open App から開かれましたが、起動を完了できませんでした。",
+    "appView.failed.hint":
+      "このタブを閉じ、Keymaster の Open App 入口から JustNote を再度起動してください。launch token は一度しか使えないため、URL を手動でブラウザに貼り付けないでください。",
     // ----- Header -----
     "header.theme.label": "テーマ",
     "header.theme.dark": "ダーク",

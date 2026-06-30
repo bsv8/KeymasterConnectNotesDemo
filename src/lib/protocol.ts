@@ -4,9 +4,14 @@
 // 设计缘由（施工单第 6 章 +
 //          施工单 2026-06-28 001 connect-session-bound-key-integration 硬切换 +
 //          施工单 2026-06-28 002 protocol-business-methods-bind-connect-session
-//          硬切换）：
-//   - 本项目接 `connect.login` / `connect.resume` / `connect.logout` 作为
-//     持续登录的真值（**取代**旧的 `identity.get` 一次性身份断言）；
+//          硬切换 +
+//          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换）：
+//   - 本项目接 `connect.login` / `connect.resume` / `connect.logout` /
+//     `connect.launch` 作为持续登录的真值（**取代**旧的 `identity.get`
+//     一次性身份断言）；
+//   - `connect.launch` 是 Keymaster Session Window 以 appView 模式拉起
+//     JustNote 时的首登入口，**不**是另一种 login 按钮；成功后归一为与
+//     `connect.login` / `connect.resume` 相同的 `ParsedConnectSession`。
 //   - 保留 `connect.*` / `cipher.encrypt` / `cipher.decrypt` 作为 JustNote
 //     实际主流程；`cipher.*` 必须按 session 绑定 key 执行，**不**依赖全局 active key。
 //   - 保留 `identity.get` 作为可选业务方法壳，但其参数已显式包含
@@ -14,7 +19,7 @@
 //     **不是**登录入口；JustNote 当前不把它接入 UI / 状态机。
 //   - 砍掉 `intent.sign` / `p2pkh.*` / `feepool.*`——这些方法与 JustNote 无关。
 //   - 类型与依赖项目 (`keymaster.cc`) 的 contract 对齐，但只暴露本项目需要的
-//     六种方法，避免 UI / 状态面被多余协议拉大。
+//     七种方法，避免 UI / 状态面被多余协议拉大。
 
 export const PROTOCOL_VERSION = 1 as const;
 export const PROTOCOL_POPUP_PATH = "/protocol/v1/popup" as const;
@@ -29,6 +34,7 @@ export const PROTOCOL_METHODS = [
   "identity.get",
   "connect.login",
   "connect.resume",
+  "connect.launch",
   "connect.logout",
   "cipher.encrypt",
   "cipher.decrypt"
@@ -223,6 +229,46 @@ export interface ConnectLogoutParams {
   connectSessionId: string;
 }
 
+/* ============== connect.launch ============== */
+
+/**
+ * `connect.launch` 请求参数（施工单 2026-06-29 001 open-app-appview-connect-launch
+ *          硬切换第 4.3 / 5.2 章）。
+ *
+ * 设计缘由：
+ *   - 这是 Keymaster Session Window 以 appView 模式拉起 JustNote 时的
+ *     **唯一首登入口**——`launchToken` 由 launcher 预先放进 client URL，
+ *     Session Window 已绑定该 app origin / session / owner / claims；
+ *   - 不带 `aud` / `iat` / `exp` / `text`：launchToken 本身由 launcher
+ *     服务端验签 + 一次性消费，caller 不再构造短时效 `aud`；
+ *   - 不带 `claims`：launcher 已经把 claims 锁进 launchToken，caller 不需要
+ *     重新协商；
+ *   - JustNote 收到 token 后必须**先**用它消费本次预建 session，**不**
+ *     允许同时偷偷发 `connect.login` 或后续再 fallback 到 `connect.login`。
+ */
+export interface ConnectLaunchParams {
+  /** launcher 预建 session 的消费 token；URL `?launchToken=` 透传。 */
+  launchToken: string;
+}
+
+/**
+ * `connect.launch` 成功结果。
+ *
+ * 与 `ConnectLoginResult` / `ConnectResumeResult` **形状完全一致**——
+ * 共享同一份 `ParsedConnectSession` 解析与持久化路径，避免出现
+ * "Open App 专用 session record" 这套第二套真值。
+ */
+export interface ConnectLaunchResult {
+  /** 由 launcher 预建、launch 阶段最终交付给 client 的稳定 session id。 */
+  connectSessionId: string;
+  /** 该 session 绑定 key 的公钥 hex。 */
+  ownerPublicKeyHex: string;
+  /** Keymaster 本次实际返回的 claim 真值。 */
+  resolvedClaims: Record<string, ResolvedClaimValue>;
+  /** 解析时间（unix milliseconds）。 */
+  resolvedAt: number;
+}
+
 /** `connect.logout` 成功结果：服务端吊销成功后回空对象。 */
 export interface ConnectLogoutResult {
   /** 吊销的 session id；与请求一致。 */
@@ -279,6 +325,7 @@ export interface MethodParamsMap {
   "identity.get": IdentityGetParams;
   "connect.login": ConnectLoginParams;
   "connect.resume": ConnectResumeParams;
+  "connect.launch": ConnectLaunchParams;
   "connect.logout": ConnectLogoutParams;
   "cipher.encrypt": CipherEncryptParams;
   "cipher.decrypt": CipherDecryptParams;
@@ -292,6 +339,7 @@ export interface MethodResultMap {
   "identity.get": IdentityGetResult;
   "connect.login": ConnectLoginResult;
   "connect.resume": ConnectResumeResult;
+  "connect.launch": ConnectLaunchResult;
   "connect.logout": ConnectLogoutResult;
   "cipher.encrypt": CipherEncryptResult;
   "cipher.decrypt": CipherDecryptResult;

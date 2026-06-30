@@ -11,15 +11,28 @@
 //          施工单 2026-06-28 001 connect-session-bound-key-integration
 //          硬切换第 1-9 章 +
 //          施工单 2026-06-28 003 lock-screen-popup-close-and-relogin
-//          硬切换第 4.2 / 4.3 / 5.1 / 5.2 章）：
-//   - 顶层固定两态：`session === null` 时只渲染 `LockScreen`；已认证才渲染工作区。
-//   - **connect session 状态机**（施工单 2026-06-28 001 第 4.1 / 8.3 章）：
+//          硬切换第 4.2 / 4.3 / 5.1 / 5.2 章 +
+//          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
+//          第 1-10 章）：
+//   - 顶层固定三态：
+//       1. appView 启动期 → 渲染 `AppViewLaunchShell`（不渲染 LockScreen）；
+//       2. `session === null` 且非 appView → 渲染 `LockScreen`；
+//       3. 已认证 → 渲染 notes 工作区。
+//   - **启动模式**（施工单 2026-06-29 001 第 4.1 章）：
+//       - `direct`：用户直开 URL；首登走 `connect.login` / `connect.resume`；
+//       - `appView`：Keymaster Session Window 拉起；URL 带 `launchToken`；
+//         首登走 `connect.launch`；
+//       - 启动成功后两种模式统一收口到同一份 connect session 真值。
+//   - **connect session 状态机**（施工单 2026-06-28 001 第 4.1 / 8.3 章 +
+//          施工单 2026-06-29 001 第 6.六 章）：
 //       - 登录真值 = `connectSessionId`；
 //       - owner 真值 = `connectSession.ownerPublicKeyHex`（**session 绑定 key**）；
 //       - popup transport 断开 ≠ 登录失效；
 //       - popup refresh = unlock runtime 失效，session 仍在；下一次请求走
 //         `connect.resume`，只要求输入密码；
-//       - caller 主动 logout 才退回登录壳。
+//       - caller 主动 logout 才退回登录壳；
+//       - **appView** 启动期：优先复用 `window.opener` 作为 transport 对端，
+//         成功后必须 `history.replaceState` 去掉 `launchToken`。
 //   - 三层状态在 UI 上的对应：
 //       - `popup transport state`（`popupState`）：`idle` / `opening` /
 //         `connected` / `disconnected`，只来自 transport；
@@ -27,10 +40,11 @@
 //         `anonymous` / `resuming` / `authenticated` / `invalid`；
 //       - `workspace state`（`currentEditorState`）：`locked` /
 //         `restoring`（解密中） / `unlocked` / `failed`（decryptFailed）。
-//   - 启动时：读取本地 `connectSession`；若有 → 自动 `resume`；若 resume
-//     命中"session 无效" → 清本地 + 退回登录壳。
+//   - 启动时：解析 URL `launchToken` → 若有则 `startupMode = "appView"`，进入
+//     appView 启动壳并自动发 `connect.launch`；否则读取本地 `connectSession`
+//     → 若有则自动 `resume`；`resume` 命中"session 无效" → 清本地 + 退回登录壳。
 //   - **不再**把 `identity.get` 当登录入口真值；JustNote 只发 `connect.login`
-//     / `connect.resume` / `connect.logout`。
+//     / `connect.resume` / `connect.launch` / `connect.logout`。
 //   - `cipher.*` 请求**必须**带 `connectSessionId`；**不**读全局 active key。
 //   - **锁屏页 popup_closed 收口**（施工单 2026-06-28 003 第 4.2 / 5.1 / 5.2 章）：
 //       - `popup_closed` 在**锁屏态**的 login / resume 流程里**不**展示为用户可见
@@ -45,22 +59,36 @@
 //       - **不**调 `clearConnectSession()`，**不**复用旧 sessionId。
 //   - 锁屏页**不再**展示"忘掉当前 session"按钮（施工单 2026-06-28 003
 //     第 4.5 / 5.6 章）。
+//   - **appView 失败语义**（施工单 2026-06-29 001 第 5.8 / 5.9 / 7 章）：
+//       - 不允许 fallback 到 `connect.login`；
+//       - 不允许把 appView 失败态塞进 LockScreen 的 login / resume /
+//         resumeFailed 三态；
+//       - 必须明确告诉用户"请从 Keymaster 重新启动 app"。
 //   - 旧章节里针对 `identity.get` / owner 快照 / pendingDrafts / decryptedCache
 //     / selection hydration 等行为全部保留，仅把 owner 真值从 `identity.get`
 //     替换为 `connectSession.ownerPublicKeyHex`。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { normalizeOrigin, ProtocolTransportError, type ProtocolLogEvent } from "./lib/connectClient";
+import {
+  normalizeOrigin,
+  ProtocolTransportError,
+  getReusableOpener,
+  readLaunchTokenFromUrl,
+  stripLaunchTokenFromUrl,
+  type ProtocolLogEvent
+} from "./lib/connectClient";
 import { PopupSessionClient } from "./lib/popupSessionClient";
 import type { ProtocolErrorCode } from "./lib/protocol";
 import {
   buildCipherDecryptRequest,
   buildCipherEncryptRequest,
+  buildConnectLaunchRequest,
   buildConnectLoginRequest,
   buildConnectLogoutRequest,
   buildConnectResumeRequest,
   parseCipherDecryptResult,
   parseCipherEncryptResult,
+  parseConnectLaunchResult,
   parseConnectSessionResult
 } from "./lib/keymaster";
 import {
@@ -118,6 +146,7 @@ import { NotesSidebar, type FolderAction, type MoveState, type NoteAction, type 
 import { NoteEditor } from "./components/NoteEditor";
 import { DocumentToolbar } from "./components/DocumentToolbar";
 import { LockScreen, type LockScreenMode } from "./components/LockScreen";
+import { AppViewLaunchShell, type AppViewLaunchPhase } from "./components/AppViewLaunchShell";
 import { NameInputDialog } from "./components/NameInputDialog";
 import { SaveOverlayDialog } from "./components/SaveOverlayDialog";
 import { SearchResultsPanel, buildSearchResults } from "./components/SearchResultsPanel";
@@ -292,6 +321,35 @@ export default function App() {
    * - `"logout"` = 主动 logout 中。
    */
   const [authFlow, setAuthFlow] = useState<"login" | "resume" | "logout" | null>(null);
+  /**
+   * 启动模式（施工单 2026-06-29 001 第 4.1 / 4.2 / 6.一 章）。
+   * - `"direct"`：用户直开 URL；首登走 `connect.login` / `connect.resume`；
+   * - `"appView"`：Keymaster Session Window 拉起；URL 带 `launchToken`；
+   *   首登走 `connect.launch`。
+   *
+   * 关键约束：仅在 mount 期一次性确定，**不**依赖后续 URL 变化。
+   */
+  const [startupMode] = useState<"direct" | "appView">(() =>
+    readLaunchTokenFromUrl() !== null ? "appView" : "direct"
+  );
+  /**
+   * appView 启动期阶段（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章）。
+   * - `null` ⇒ 非 appView 模式 / 已完成启动；
+   * - `"launching"` ⇒ 正在调 `connect.launch`（已发 / 等 result）；
+   * - `"failed"` ⇒ 启动失败（opener 不可用 / connect.launch 返回失败 / 协议错误）；
+   *
+   * 注意：
+   *   - 这里**不**单独存一个本地"openAppMode"布尔存储——`startupMode` 已经
+   *     记录了启动期的启动模式，启动成功后会从 URL 去掉 `launchToken` 并
+   *     把 `session` 写上，下一次重启就走 direct mode 走 `connect.resume`；
+   *   - 启动失败后**不**回退到 LockScreen，也不允许 fallback 到 `connect.login`；
+   *     必须明确告诉用户从 Keymaster 重新拉起。
+   */
+  const [appViewPhase, setAppViewPhase] = useState<AppViewLaunchPhase | null>(
+    startupMode === "appView" ? "launching" : null
+  );
+  /** appView 失败时附带的简短错误描述（i18n 之外的真实 reason / message）。 */
+  const [appViewFailureReason, setAppViewFailureReason] = useState<string | null>(null);
   /** `resume` 流程中，session 被服务端判定无效 → 锁屏显示"恢复失败，请重新登录"。 */
   const [resumeFailed, setResumeFailed] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
@@ -525,21 +583,120 @@ export default function App() {
     return () => window.removeEventListener("resize", evaluate);
   }, [isSidebarOpenOnMobile]);
 
+  /* ============== 启动时：appView 模式 → connect.launch ============== */
+
+  /**
+   * appView 启动期：调 `connect.launch`。
+   *
+   * 设计缘由（施工单 2026-06-29 001 第 4.3 / 5 / 6 / 7 章）：
+   *   - 必须在 startup 期**优先**复用 `window.opener` 作为 transport 对端
+   *     （`PopupSessionClient.adoptOpener`），**不**主动 `window.open`
+   *     一扇新 popup；
+   *   - 成功 → 写本地 `StoredConnectSessionRecord`、`setSession(...)`、
+   *     `history.replaceState` 去掉 URL 中的 `launchToken`，与 `connect.login`
+   *     / `connect.resume` 走同一份收口逻辑；
+   *   - 失败（`no_opener` / `connect.launch` 返回失败 / 协议错误）→ 进入
+   *     appView 失败态，**不**自动 fallback 到 `connect.login`，**不**清本地
+   *     session（如果存在旧本地 session）。
+   *
+   * 边界：
+   *   - 只跑**一次**（依赖 `[]`，mount 期触发）；
+   *   - `appViewPhase === "launching"` 才允许进入；防止用户后续 reload 又
+   *     触发；
+   *   - 成功后即便 `localStorage` 里已有旧 session，**仍以本次 launch
+   *     结果为准**（施工单第 7.6 章）。
+   */
+  const performAppViewLaunch = useCallback(
+    async (launchToken: string) => {
+      if (!normalizedTargetOrigin) {
+        setAppViewFailureReason(t("app.error.targetOriginInvalid"));
+        setAppViewPhase("failed");
+        return;
+      }
+      setAuthFlow("login");
+      setLastError(null);
+      try {
+        const popup = getSessionClient();
+        // 1) 优先收养 window.opener 作为 transport 对端，**不**新开 popup。
+        await popup.adoptOpener();
+        // 2) 调 `connect.launch`。
+        const requestId = makeRequestId();
+        const request = buildConnectLaunchRequest({
+          launchToken,
+          requestId
+        });
+        const response = await popup.runRequest(request);
+        if (!response.ok) {
+          setAppViewFailureReason(
+            formatProtocolError(response.error.code, response.error.message, t)
+          );
+          setAppViewPhase("failed");
+          return;
+        }
+        const parsed = parseConnectLaunchResult(response.result as never);
+        // 3) 与 connect.login / connect.resume 共用同一份持久化结构。
+        const record: StoredConnectSessionRecord = {
+          v: 1,
+          sessionId: parsed.connectSessionId,
+          ownerPublicKeyHex: parsed.ownerPublicKeyHex,
+          targetOrigin: normalizedTargetOrigin,
+          claimsSnapshot: parsed.claims as Record<string, unknown>,
+          resolvedAt: parsed.resolvedAt
+        };
+        saveConnectSession(record);
+        setSession({
+          sessionId: parsed.connectSessionId,
+          ownerPublicKeyHex: parsed.ownerPublicKeyHex,
+          claims: parsed.claims as Record<string, unknown>,
+          resolvedAt: parsed.resolvedAt,
+          targetOrigin: normalizedTargetOrigin
+        });
+        setPopupState("connected");
+        // 4) 去掉 URL 中的 `launchToken`，避免刷新后再次消费一次性凭证。
+        stripLaunchTokenFromUrl();
+        setAppViewPhase(null);
+      } catch (err) {
+        // appView 启动失败：transport / 协议层都按"无法完成 Open App 启动"
+        // 统一收口；**不**清本地 session，**不**回退到 LockScreen。
+        let reason: string;
+        if (err instanceof ProtocolTransportError && err.code === "no_opener") {
+          reason = t("appView.failed.hint");
+        } else if (shouldSilenceErrorOnLockScreen(err)) {
+          // 极少出现：opener Session Window 在 ready 之前被关掉。
+          reason = t("appView.failed.hint");
+        } else {
+          reason = formatTransportError(err, t);
+        }
+        setAppViewFailureReason(reason);
+        setAppViewPhase("failed");
+      } finally {
+        setAuthFlow(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [normalizedTargetOrigin, t]
+  );
+
   /* ============== 启动时：自动读取本地 connect session 并 resume ============== */
 
   /**
-   * 启动期 connect session 处理（施工单 2026-06-28 001 第 5.2 / 5.5 / 6.7 章）：
+   * 启动期 connect session 处理（施工单 2026-06-28 001 第 5.2 / 5.5 / 6.7 章 +
+   *          施工单 2026-06-29 001 第 4.1 / 6.一 / 6.五 / 7 章）：
    *
-   * 1. 读取本地 `StoredConnectSessionRecord`；
-   * 2. 缺失 / 非法 → 不动 `session`，让用户走 `login`；
-   * 3. 存在但 `targetOrigin` 与当前不一致 → 视为"跨 origin 复用"，
-   *    清掉本地 session，**不**自动 resume；
-   * 4. 存在且 origin 一致 → 标记 `authFlow = "resume"`，调 `connect.resume`；
-   *    - 成功：写本地 session（refresh 时间戳 / claims）、进入工作区；
-   *    - 命中"session 无效"（吊销 / key 删 / origin mismatch）：清本地 session，
-   *      设 `resumeFailed = true`，让锁屏展示"恢复失败"；
-   *    - 命中"需要解锁"（unlock required）：popup 解锁 UI 接管，本 caller
-   *      走 `session.invalid === false` 分支，照常恢复。
+   * 1. 解析当前 URL；
+   * 2. 若 URL 带非空 `launchToken` ⇒ `startupMode = "appView"`：直接走
+   *    `performAppViewLaunch(launchToken)`，**不**走 LockScreen / 不读
+   *    本地 session；
+   * 3. 否则 `startupMode = "direct"`：读取本地 `StoredConnectSessionRecord`；
+   *    - 缺失 / 非法 → 不动 `session`，让用户走 `login`；
+   *    - 存在但 `targetOrigin` 与当前不一致 → 视为"跨 origin 复用"，
+   *      清掉本地 session，**不**自动 resume；
+   *    - 存在且 origin 一致 → 标记 `authFlow = "resume"`，调 `connect.resume`；
+   *      - 成功：写本地 session（refresh 时间戳 / claims）、进入工作区；
+   *      - 命中"session 无效"（吊销 / key 删 / origin mismatch）：清本地 session，
+   *        设 `resumeFailed = true`，让锁屏展示"恢复失败"；
+   *      - 命中"需要解锁"（unlock required）：popup 解锁 UI 接管，本 caller
+   *        走 `session.invalid === false` 分支，照常恢复。
    *
    * 边界（施工单 2026-06-28 001 第 5.2 / 6.7 / 9.2 章）：
    *   - 只跑**一次**（依赖 `[]`，mount 期触发）；
@@ -549,6 +706,11 @@ export default function App() {
    *     popup 失败由用户主动点"重试 / 重新登录"。
    */
   useEffect(() => {
+    const launchToken = readLaunchTokenFromUrl();
+    if (launchToken) {
+      void performAppViewLaunch(launchToken);
+      return;
+    }
     const stored = loadConnectSession();
     if (!stored) return;
     if (stored.targetOrigin !== (normalizedTargetOrigin || targetOrigin)) {
@@ -773,6 +935,26 @@ export default function App() {
     setLastError(null);
     try {
       const popup = getSessionClient();
+      // 施工单 2026-06-29 001 第 6.六 / 7.3 / 7.4 章：刷新后若
+      // `window.opener` 还指向现成的 Session Window，**优先**复用它，
+      // 避免"刷新一下就新开一扇 popup"的体验问题；只有 opener 不可用
+      // 才走原 `ensureSession()` 路径——`ensureSession()` 内部会在需要时
+      // 调 `window.open(...)` 新开 popup。
+      if (getReusableOpener(normalizedTargetOrigin)) {
+        try {
+          await popup.adoptOpener();
+        } catch (err) {
+          // 收养失败（no_opener / 已失效）：降级到"开新 popup"路径，
+          // 由 `runRequest()` 内部 `ensureSession()` 接管。**不**清本地
+          // session，**不**标记 resumeFailed——这只是 transport 层面的
+          // 兜底选择。
+          if (!(err instanceof ProtocolTransportError && err.code === "no_opener")) {
+            // 其它错误（例如 close poller 立刻发现 opener 已关）也走降级。
+            sessionRef.current?.closeSession();
+            sessionRef.current = null;
+          }
+        }
+      }
       const requestId = makeRequestId();
       const request = buildConnectResumeRequest({
         connectSessionId: stored.sessionId,
@@ -2257,6 +2439,24 @@ export default function App() {
     if (authFlow === "login") return "login";
     return "login";
   })();
+
+  // appView 启动期（URL 带 launchToken）：必须先跑 `connect.launch`，
+  // **不**渲染 LockScreen，**不**读本地 session，**不**自动 fallback
+  // 到 `connect.login`。
+  //
+  // 设计缘由（施工单 2026-06-29 001 第 4.1 / 6.五 / 7 章）：
+  //   - 启动期阶段 = `appViewPhase`：mount 时根据 `startupMode` 初始化为
+  //     `"launching"`，成功 → null，失败 → `"failed"`；
+  //   - 启动成功后会 `setSession(...)`，渲染分支会自然落到工作区；
+  //   - 启动失败进入专用失败态；不渲染 LockScreen、也不允许 fallback。
+  if (appViewPhase !== null) {
+    return (
+      <AppViewLaunchShell
+        phase={appViewPhase}
+        reason={appViewPhase === "failed" ? appViewFailureReason : null}
+      />
+    );
+  }
 
   // 未登录态：只渲染 LockScreen；不显示 notes 工作区任何部分。
   //

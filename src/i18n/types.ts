@@ -65,6 +65,13 @@ export type MessageKey =
   | "lock.status.resumeFailed"
   | "lock.status.resumeFailed.description"
   | "lock.footer"
+  // ----- AppView launch shell -----
+  | "appView.title"
+  | "appView.launching.title"
+  | "appView.launching.description"
+  | "appView.failed.title"
+  | "appView.failed.description"
+  | "appView.failed.hint"
   // ----- Header -----
   | "header.theme.label"
   | "header.theme.dark"

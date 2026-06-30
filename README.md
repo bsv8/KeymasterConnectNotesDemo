@@ -12,6 +12,8 @@ JustNote 是一个单页前端笔记应用：正文按 session 绑定 key 加密
 
 - 用 `connect.login` 拉起 Keymaster popup 完成首次登录并选定 key；
 - 用 `connect.resume` 在页面刷新、popup 关闭重开、transport 抖动时恢复已授权的 session；
+- 用 `connect.launch` 在 Keymaster 以 **Open App** 入口拉起 JustNote 时消费 launcher
+  预建的 session（一次性 `launchToken`）；
 - 用 `connect.logout` 显式吊销 session 并退回登录壳；
 - 用 `cipher.encrypt` / `cipher.decrypt` 真实加解密笔记正文（按 session 绑定 key 执行，**不**依赖全局 active key）；
 - 用 folder/note 显式实体管理笔记结构；
@@ -32,6 +34,10 @@ JustNote 是一个单页前端笔记应用：正文按 session 绑定 key 加密
 - 首次登录 → `connect.login`：popup 解锁 → 选 key → 返回 sessionId + ownerPublicKeyHex。
 - 页面刷新 / popup refresh / transport 断线 → `connect.resume`：若 session
   仍在，只要求输入密码恢复 unlock，**不**重新选 key，**不**重新登录。
+- Keymaster 以 **Open App** 入口拉起 → `connect.launch`：URL 带一次性
+  `launchToken`；JustNote 优先复用 `window.opener` 作为 transport 对端，
+  不新开 popup；成功后归一为同一份 connect session 真值，**不**引入
+  "Open App 专用 session record"。
 - 用户主动退出 → `connect.logout`：服务端吊销 + 清本地 session，回登录壳。
 - 任何**非显式**路径（transport 抖动、popup 关闭、主站切 active key）都**不**清
   session；只把 transport 状态置为 `disconnected`，下次协议请求时优先 `resume`。
@@ -201,6 +207,61 @@ workspace         ← 二栏 grid：sidebar | document-panel
 不引入 owner 列表、回收站、软删除、恢复机制、`targetOrigin + owner` 双因子分区、
 IndexedDB / 多数据库方案。
 
+## 启动模式：direct 与 appView（硬切换硬约束）
+
+JustNote 同时支持两种启动方式，两种方式共用**同一套**工作区、同一套 `connect
+session` 真值、同一套 `cipher.*` 保存/读取路径；区别**只允许**存在于启动阶段。
+
+### 启动模式定义
+
+- `direct` — 用户直接打开 `https://justnote.apps.bsv8.com/`（或自定义 origin
+  下部署的 JustNote）。URL 不带 `launchToken`；首登走 `connect.login` /
+  `connect.resume`。
+- `appView` — Keymaster Session Window 通过 **Open App** 入口拉起 JustNote。
+  URL 带一次性 `launchToken`；首登走 `connect.launch`。
+
+### 启动模式判定
+
+`startupMode` 只在页面 mount 时一次性判定，**不**依赖后续 URL 变化：
+
+```txt
+readLaunchTokenFromUrl() !== null  ⇒  startupMode = "appView"
+否则                                ⇒  startupMode = "direct"
+```
+
+### appView 启动期行为
+
+- 优先复用 `window.opener` 作为 transport 对端，**不**新开 popup；
+- 调 `connect.launch(launchToken)`；
+- 成功：写本地 `StoredConnectSessionRecord`，`history.replaceState` 去掉 URL
+  中的 `launchToken`，进入工作区；
+- 失败：进入 `AppViewLaunchShell` 的失败态（明确告诉用户"请从 Keymaster
+  重新启动 app"），**不**自动 fallback 到 `connect.login`。
+
+### token 处理
+
+- `launchToken` 只用于**一次** `connect.launch`，成功立即从 URL 移除；
+- 一次性的 launchToken URL 被重复打开时，按 appView 失败态收口；
+- `launchToken` **不**写入 localStorage / IndexedDB。
+
+### 运行期自愈
+
+- appView 成功后，即便原 Session Window 被用户关掉，下次协议请求若发现
+  对端已丢失，仍允许重新开 popup 走 `connect.resume` 续上；
+- 不要求用户每次都重新从 Keymaster Open App 拉起。
+
+### 启动模式 ≠ 第二套 app
+
+`direct` 与 `appView` 不是两套页面或两套工作区状态机，**只是**启动期的入口
+分叉。成功后统一收口到同一份 connect session 真值：
+
+```txt
+appView 成功 + 去掉 launchToken + 进入工作区
+  = 与 connect.login 成功后完全一致的 session / workspace 状态
+```
+
+---
+
 ## 启动方式
 
 ```bash
@@ -221,6 +282,7 @@ JustNote 运行时调用以下协议方法：
 |---|---|
 | `connect.login` | 首次登录入口；用户选 key；返回 `connectSessionId + ownerPublicKeyHex + claimsSnapshot` |
 | `connect.resume` | 恢复已授权的 session；不重新选 key；命中"需要解锁"时只要求输入密码 |
+| `connect.launch` | Keymaster Open App 入口拉起 JustNote 时的首登入口；URL 带 `launchToken`；复用 `window.opener`；成功后归一为同一份 connect session 真值 |
 | `connect.logout` | 显式吊销 session；服务端吊销后回登录壳 |
 | `cipher.encrypt` | 保存 note 时把 markdown UTF-8 字节加密为 nonce + cipherbytes；按 session 绑定 key 执行 |
 | `cipher.decrypt` | 打开 note 时把密文还原为 markdown 明文；按 session 绑定 key 执行 |
@@ -519,15 +581,18 @@ src/
     storage.ts           # owner 分区 KV + folder/note CRUD + 冲突检查
                          # + connect session 本地记录存取
   components/
-    LockScreen.tsx       # 登录壳 + 恢复中 + 恢复失败（mode 三态）
-    ConnectStatus.tsx    # 已登录态顶栏 + sessionId / 恢复 / 退出登录 按钮
-    NotesSidebar.tsx     # 左侧 folder/note 树 + 右键菜单 + 拖拽 + 简化 folder 工具条
-    NoteEditor.tsx       # BlockNote 包装（markdown 单真值）
-    DocumentToolbar.tsx  # 文档区顶部 Notion 风格两排工具条（tag + 状态 + 动作）
-  App.tsx                # connect session 状态机 + LockScreen / Notes 二段式渲染
-                         # + 自动 resume 流程 + app-banner + 窄屏文件树开合状态
-  main.tsx               # 挂载入口
-  styles.css             # LockScreen 样式 + 工作区样式 + banner / toolbar / 响应式
+    LockScreen.tsx          # 登录壳 + 恢复中 + 恢复失败（mode 三态）
+    AppViewLaunchShell.tsx  # appView 启动期专用壳：launching / failed 两态
+    ConnectStatus.tsx       # 已登录态顶栏 + sessionId / 恢复 / 退出登录 按钮
+    NotesSidebar.tsx        # 左侧 folder/note 树 + 右键菜单 + 拖拽 + 简化 folder 工具条
+    NoteEditor.tsx          # BlockNote 包装（markdown 单真值）
+    DocumentToolbar.tsx     # 文档区顶部 Notion 风格两排工具条（tag + 状态 + 动作）
+  App.tsx                   # connect session 状态机 + startupMode (direct / appView)
+                            # + LockScreen / AppViewLaunchShell / Notes 三态渲染
+                            # + 自动 resume 流程 + app-banner + 窄屏文件树开合状态
+  main.tsx                  # 挂载入口
+  styles.css                # LockScreen / AppViewLaunchShell 样式 + 工作区样式
+                            # + banner / toolbar / 响应式
 ```
 
 ## 不允许的事
@@ -580,3 +645,16 @@ src/
 - 不在 session 绑定 key 失效时自动换成另一把 key 继续工作。
 - 不让 `resume` 重新选 key / 重新走 login。
 - 不让 logout 只做本地清空而不调 `connect.logout`。
+
+### Open App / appView 启动硬切换的额外边界（2026-06-29 001）
+
+- 不把 Open App 做成第二个独立 app shell、第二套页面或第二套工作区状态机。
+- 不检测到 `launchToken` 后先走一遍 `connect.login`，失败了再试 `connect.launch`。
+- 不在 `connect.launch` 成功后保留 URL 里的 `launchToken` 不清理。
+- 不让 appView 启动期忽略 `window.opener`，一上来就自己 `window.open` 一扇新的 popup。
+- 不把 `window.opener` 永久当作唯一 transport 真值。
+- 不在 `connect.launch` 失败后自动退化成"锁屏页正常登录"。
+- 不新增一份 `openAppSession` / `launchSession` 本地存储。
+- 不把 `launchToken` 直接存到 localStorage 当长期真值。
+- 不要求用户在 Open App 路径里手工填写 `targetOrigin`、手工点击"登录"。
+- 不为了支持 Open App 把"用户直接打开 URL 手工登录"这条既有路径删掉。

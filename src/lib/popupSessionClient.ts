@@ -2,7 +2,9 @@
 // 页面级 popup session client。
 //
 // 设计缘由（施工单第 6 章 + 2026-06-27 note-open-cancel-and-transport-hard-switch
-//          第 4.2 / 5.5 / 8.3 章）：
+//          第 4.2 / 5.5 / 8.3 章 +
+//          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
+//          第 4.4 / 6.四 章）：
 //   - 同一 JustNote 页面，对同一 `targetOrigin`，只维护一个 popup 会话。
 //   - 首次 `ensureSession()` 时若没有 popup 句柄就开窗、等一次 `ready`。
 //   - 后续 `runRequest()` 复用现有 popup 句柄：不再 `window.open`。
@@ -21,18 +23,23 @@
 //   - **仅**在 `ready` 已收到、但首条 `request` 发送前 popup 又刚好失效的
 //     极小竞态窗口里，transport 允许内部重建一次 session 并重发同一条 request；
 //     这不是通用自动重试，不扩展到业务失败 / result timeout / user_rejected。
+//   - **appView 启动期**：必须支持"收养现有 Session Window"作为 transport 对端
+//     （详见 `adoptOpener`），**不**主动 `window.open` 一扇新的 popup；
+//     但运行期若这扇 opener 后来被关闭，下次 `runRequest` 仍允许重新开 popup
+//     走 `connect.resume` 续上。
 //
 // 这一层拥有：
 //   - 长期 `message` 监听（ResultDispatcher）；
-//   - popup 句柄；
+//   - popup 句柄（或被收养的 opener 句柄）；
 //   - popup 关闭轮询；
 //   - 连接状态机（`opening` / `connected` / `disconnected`）；
 //   - 最薄的 pending request 注册表（仅做收尾）。
 //
 // 这一层**不**拥有：
-//   - 任何业务方法（identity.get / cipher.*）；
+//   - 任何业务方法（identity.get / cipher.* / connect.*）；
 //   - 任何 UI；只通过回调与日志暴露；
-//   - "当前 note 是谁"的判断（那是业务层的活）。
+//   - "当前 note 是谁"的判断（那是业务层的活）；
+//   - "launchToken 是否还有效" 的判定（那是协议层的活）。
 
 import type {
   PopupConnectionState,
@@ -48,6 +55,7 @@ import {
   buildPopupUrl,
   browserEnv,
   createResultDispatcher,
+  getReusableOpener,
   isPopupClosed,
   normalizeOrigin,
   type ProtocolClientEnv,
@@ -114,6 +122,10 @@ export class PopupSessionClient {
    *   - 若 state === connected 且 popup 还活着：直接返回；
    *   - 若 popup 句柄丢了 / 关闭了：重开；
    *   - 首次调用：开窗、等 ready。
+   *
+   * 默认走"开新 popup"路径；appView 启动期需要复用 `window.opener` 时，
+   * 调用方必须**先**调 `adoptOpener()`，再走 `runRequest()`——`ensureSession()`
+   * 不会主动去找 opener。
    */
   async ensureSession(): Promise<void> {
     const targetOrigin = normalizeOrigin(this.opts.targetOrigin);
@@ -130,6 +142,77 @@ export class PopupSessionClient {
       this.readyPromise = null;
       throw err;
     }
+  }
+
+  /**
+   * "收养现有 Session Window"——appView 启动期 / 刷新后恢复入口。
+   *
+   * 设计缘由（施工单 2026-06-29 001 第 4.4 / 6.四 / 7.1 / 7.3 章 +
+   *          上游 `keymaster.cc` Session Window 启动语义）：
+   *   - appView 启动期 `window.opener` 已经指向 Keymaster Session Window；
+   *   - 调用方必须能复用这扇已存在的窗口作为 transport 对端，**不**允许
+   *     主动 `window.open` 一扇新 popup——否则一次 Open App 会变成两扇
+   *     协议窗口、首次 `connect.launch` 也无处发送；
+   *   - 成功：当前 popup 句柄替换为 `window.opener`，状态收口到 `connected`，
+   *     后续 `runRequest()` 直接往这扇 Session Window 发请求；
+   *   - 失败（无 opener / opener 已关 / targetOrigin 不一致）：抛 `no_opener`
+   *     给调用方，调用方应走 appView 失败态（"请从 Keymaster 重新启动"）。
+   *
+   * ready 握手语义（**与上游对齐**，修正单卡点 1）：
+   *   - 上游 Session Window 在 mount 时**只**向自己的 `window.opener`
+   *     （launcher / 旧 popup caller）发 `ready`，**不**为后续由它
+   *     `openClientApp()` 打开的 client app 再补发一次；
+   *   - 因此 JustNote 在 `adoptOpener()` 里**不**做"等 Session Window
+   *     发 ready"的握手——该信号不会到；改为：
+   *       1. 校验 `window.opener` 存在且与 targetOrigin 同源；
+   *       2. 安装 message listener；
+   *       3. 启动 close poller + 把状态切到 `connected`；
+   *   - 实际"对端是否能正确响应 request"由 `runRequest()` 的
+   *     `result_timeout` / close poller 兜底——若 Session Window 真的没
+   *     准备好，request 会拿不到 result，按 `result_timeout` 收口。
+   *   - 这一收口与上游 connect popup 路径的 `ready` 等待行为**有意不同**：
+   *     popup 路径下 Session Window 的 `window.opener` 就是 JustNote，
+   *     mount 时发的 `ready` 是发给 JustNote 的，所以等它成立；
+   *     appView 路径下 Session Window 的 `window.opener` 是 launcher，
+   *     `ready` 不会到达 JustNote，所以**不能**等。
+   *
+   * 边界：
+   *   - **不**调用 `window.open(...)`——这是与"开新 popup"分支的核心区别；
+   *   - 若上层在收养后又被要求"换 origin"，必须先 `closeSession()`，再走
+   *     `ensureSession()` 重新开 popup。
+   */
+  async adoptOpener(): Promise<void> {
+    const targetOrigin = normalizeOrigin(this.opts.targetOrigin);
+    const reusable = getReusableOpener(targetOrigin);
+    if (!reusable) {
+      this.log("no_opener", { targetOrigin }, "no reusable opener for appView");
+      throw new ProtocolTransportError(
+        "no_opener",
+        "No reusable Session Window opener is available; please relaunch from Keymaster."
+      );
+    }
+    // 若当前已经处于 connected 且持有同一扇窗口，直接复用；否则接管状态。
+    if (
+      this.state === "connected" &&
+      this.popup === reusable.opener &&
+      this.currentTargetOrigin === targetOrigin
+    ) {
+      return;
+    }
+    // 旧 session 还没收口：这里显式 teardown 一次，避免继续绑着旧句柄。
+    if (this.state !== "idle" || this.popup || this.dispatcher || this.listenerInstalled) {
+      this.teardownSession("popup_closed", "Replaced existing popup before adopting opener");
+    }
+    this.transitionTo("opening");
+    this.popup = reusable.opener;
+    this.currentTargetOrigin = targetOrigin;
+    this.installMessageListenerOnce(targetOrigin);
+    this.startClosePoller();
+    this.log("opener_adopted", { targetOrigin }, "adopted existing Session Window opener");
+    // 不等待 Session Window 的 `ready`：上游语义下它不会到。JustNote 信任
+    // 对端 alive，直接进入 connected；后续 `runRequest()` 由 result_timeout /
+    // close poller 兜底。
+    this.transitionTo("connected", "ready");
   }
 
   /**

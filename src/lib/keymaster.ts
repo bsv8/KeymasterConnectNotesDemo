@@ -5,10 +5,15 @@
 //          施工单 2026-06-28 001 connect-session-bound-key-integration 硬切换
 //          第 4 / 5 / 8 章 +
 //          施工单 2026-06-28 002 protocol-business-methods-bind-connect-session
-//          硬切换）：
-//   - 上层只关心"登录 / 续登 / 注销 / 加密 / 解密"五个业务动作，**不**直接拼协议对象。
+//          硬切换 +
+//          施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
+//          第 6 / 8 章）：
+//   - 上层只关心"登录 / 续登 / 启动 / 注销 / 加密 / 解密"六个业务动作，
+//     **不**直接拼协议对象。
 //   - 这里集中处理 `aud`、origin 校验、BinaryField 转换、connectSessionId 注入。
-//   - `connect.login` / `connect.resume` / `connect.logout` 是持续登录的真值。
+//   - `connect.login` / `connect.resume` / `connect.launch` / `connect.logout`
+//     是持续登录的真值；`connect.launch` 是 Keymaster Session Window 以
+//     appView 模式拉起 JustNote 时的首登入口，**不**是另一种 login 按钮。
 //   - `identity.get` 旧 helper 仍保留，但其 contract 已切到 session-bound：
 //     必须显式传入 `connectSessionId`；定位是"会话内身份断言能力"，JustNote
 //     自身当前不再调用它。
@@ -20,6 +25,8 @@ import type {
   CipherDecryptResult,
   CipherEncryptParams,
   CipherEncryptResult,
+  ConnectLaunchParams,
+  ConnectLaunchResult,
   ConnectLoginParams,
   ConnectLoginResult,
   ConnectLogoutParams,
@@ -120,6 +127,37 @@ export interface ParsedConnectSession {
 }
 
 /**
+ * 构造 `connect.launch` 协议请求。
+ *
+ * 设计缘由（施工单 2026-06-29 001 open-app-appview-connect-launch 硬切换
+ *          第 4.3 / 5.2 / 6.三 章）：
+ *   - 唯一必填字段 = `launchToken`；
+ *   - **不**带 `aud` / `iat` / `exp` / `text`：launchToken 本身由 launcher 服务端
+ *     验签 + 一次性消费，caller 不再构造短时效 `aud`；
+ *   - **不**带 `claims`：launcher 已把 claims 锁进 launchToken；
+ *   - `launchToken` 由 launcher 放进 client URL 的 `?launchToken=` query，
+ *     透传到此处。
+ */
+export function buildConnectLaunchRequest(options: {
+  launchToken: string;
+  requestId: string;
+}): ProtocolRequestMessage<"connect.launch"> {
+  if (!options.launchToken) {
+    throw new Error("connect.launch requires a non-empty launchToken");
+  }
+  const params: ConnectLaunchParams = {
+    launchToken: options.launchToken
+  };
+  return {
+    v: 1,
+    type: "request",
+    id: options.requestId,
+    method: "connect.launch",
+    params
+  };
+}
+
+/**
  * 把 `connect.login` / `connect.resume` 结果归一为 `ParsedConnectSession`。
  * - login / resume 的 result 结构相同（都是 `connectSessionId + ownerPublicKeyHex + claims + resolvedAt`），
  *   所以共用同一份解析函数。
@@ -127,6 +165,26 @@ export interface ParsedConnectSession {
 export function parseConnectSessionResult(
   result: ConnectLoginResult | ConnectResumeResult
 ): ParsedConnectSession {
+  return {
+    connectSessionId: result.connectSessionId,
+    ownerPublicKeyHex: result.ownerPublicKeyHex,
+    claims: result.resolvedClaims,
+    resolvedAt: result.resolvedAt
+  };
+}
+
+/**
+ * 把 `connect.launch` 结果归一为 `ParsedConnectSession`。
+ *
+ * 设计缘由（施工单 2026-06-29 001 第 6.六 章）：
+ *   - launch / login / resume 的 result 形状完全一致；
+ *   - **不**引入"Open App 专用 session record"——launch 成功后必须共用
+ *     同一份 `StoredConnectSessionRecord` 持久化结构；
+ *   - 因此**不**新增第二套 result 解析路径，直接复用 `parseConnectSessionResult`
+ *     的真值结构。这里仅保留一个语义清晰的入口，避免调用方在 launch 成功
+ *     分支里写 `result as never` 这种绕过 type 的硬转。
+ */
+export function parseConnectLaunchResult(result: ConnectLaunchResult): ParsedConnectSession {
   return {
     connectSessionId: result.connectSessionId,
     ownerPublicKeyHex: result.ownerPublicKeyHex,
